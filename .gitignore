@@ -18,6 +18,9 @@ xcuserdata/
 /sessions/
 /cat-status/
 
+# Accidental nested checkout
+/catdex/
+
 # Local credentials / environment
 .netrc
 .env
