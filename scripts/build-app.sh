@@ -20,7 +20,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
     <key>CFBundleExecutable</key>
     <string>CatdexMenu</string>
     <key>CFBundleIdentifier</key>
-    <string>local.zoey.catdex-menu</string>
+    <string>dev.catdex.CatdexMenu</string>
     <key>CFBundleName</key>
     <string>CatdexMenu</string>
     <key>CFBundleDisplayName</key>

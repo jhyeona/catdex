@@ -10,7 +10,10 @@ swift build -c release --product catdex
 APP_PATH="$($ROOT_DIR/scripts/build-app.sh)"
 
 mkdir -p "$BIN_DIR" "$APP_TARGET_DIR"
-cp "$ROOT_DIR/.build/release/catdex" "$BIN_DIR/catdex"
+TMP_CATDEX="$BIN_DIR/.catdex.tmp.$$"
+cp "$ROOT_DIR/.build/release/catdex" "$TMP_CATDEX"
+chmod 755 "$TMP_CATDEX"
+mv -f "$TMP_CATDEX" "$BIN_DIR/catdex"
 rm -rf "$APP_TARGET_DIR/CatdexMenu.app"
 cp -R "$APP_PATH" "$APP_TARGET_DIR/CatdexMenu.app"
 

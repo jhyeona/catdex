@@ -52,7 +52,7 @@ Click the menu bar item to see the session list:
 
 ```text
 🐱 Codex Cats
-😼 RUNNING  investigate duplicate reminders  ·  work-plus @fix/reminder
+😼 RUNNING  investigate duplicate reminders  ·  backend-app @fix/reminder
 🙀 FAILED   fix the UI build                 ·  admin-web
 ```
 
@@ -385,7 +385,7 @@ review > failed > stale > responding > starting/running > waiting
 
 ```text
 🐱 Codex Cats
-😼 RUNNING  배치 중복 발송 조사  ·  work-plus @fix/reminder
+😼 RUNNING  배치 중복 발송 조사  ·  backend-app @fix/reminder
 🙀 FAILED   UI 빌드 수정         ·  admin-web
 ```
 
