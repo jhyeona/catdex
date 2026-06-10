@@ -150,14 +150,16 @@ Open the menu bar item and choose `Token Usage`.
 
 Catdex totals `token_count` events from Codex session files under `~/.codex/sessions`. The default range is the last 30 days, including today. The submenu shows total, input, cached input, output, reasoning tokens, session count, and event count.
 
-Usage is calculated in the background when the menu app starts, when the date range changes, when a Catdex-launched session finishes, when you choose `Refresh Usage`, and once per hour while `Hourly Refresh` is enabled. Hourly refresh is on by default so sessions started outside Catdex are still picked up while the app is open.
+Usage is calculated in the background when the menu app starts, when the date range changes, when a Catdex-launched session finishes, when you choose `Refresh Usage`, and once per hour while `Hourly Refresh` is enabled. Hourly refresh is on by default so sessions started outside Catdex are still picked up while the app is open. Catdex also includes Codex session files recorded in Catdex session state, so non-standard Codex homes can still be counted for Catdex-launched sessions.
 
 Use:
 
-- `Refresh Usage`: rescan Codex session files for the selected range
 - `Hourly Refresh`: turn the 1-hour automatic rescan on or off
+- `Refresh Usage`: rescan Codex session files for the selected range
 - `Set Usage Range...`: choose custom start and end dates
 - `Reset Usage Range (30 Days)`: return to the default 30-day range
+- `Set Sessions Folder...`: choose a custom Codex sessions folder
+- `Reset Sessions Folder`: use `$CODEX_HOME/sessions` when available, otherwise `~/.codex/sessions`
 
 ## Custom Icons
 
@@ -423,12 +425,14 @@ review > failed > stale > responding > starting/running > waiting
 
 `~/.codex/sessions` 아래 Codex 세션 파일의 `token_count` 이벤트를 합산합니다. 기본 기간은 오늘을 포함한 최근 30일입니다. 하위 메뉴에서 total, input, cached input, output, reasoning 토큰과 세션 수, 이벤트 수를 확인할 수 있습니다.
 
-사용량은 메뉴 앱 시작 시, 기간 변경 시, catdex로 실행한 세션이 끝났을 때, `Refresh Usage`를 선택했을 때, 그리고 `Hourly Refresh`가 켜져 있으면 1시간마다 백그라운드에서 다시 계산합니다. 앱을 열어둔 동안 catdex 밖에서 실행한 Codex 세션도 잡기 위해 기본값은 켜짐입니다.
+사용량은 메뉴 앱 시작 시, 기간 변경 시, catdex로 실행한 세션이 끝났을 때, `Refresh Usage`를 선택했을 때, 그리고 `Hourly Refresh`가 켜져 있으면 1시간마다 백그라운드에서 다시 계산합니다. 앱을 열어둔 동안 catdex 밖에서 실행한 Codex 세션도 잡기 위해 기본값은 켜짐입니다. Catdex 세션 상태에 기록된 Codex 세션 파일도 함께 합산하므로, 표준 경로가 아닌 Codex home을 쓰더라도 catdex로 실행한 세션은 집계될 수 있습니다.
 
-- `Refresh Usage`: 선택한 기간의 Codex 세션 파일 다시 스캔
 - `Hourly Refresh`: 1시간 자동 재스캔 켜기/끄기
+- `Refresh Usage`: 선택한 기간의 Codex 세션 파일 다시 스캔
 - `Set Usage Range...`: 시작일과 종료일 직접 설정
 - `Reset Usage Range (30 Days)`: 기본 30일 범위로 복구
+- `Set Sessions Folder...`: Codex sessions 폴더 직접 선택
+- `Reset Sessions Folder`: `$CODEX_HOME/sessions`가 있으면 사용하고, 없으면 `~/.codex/sessions` 사용
 
 ## 아이콘 설정
 

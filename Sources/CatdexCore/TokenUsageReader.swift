@@ -58,9 +58,10 @@ public struct TokenUsageReader {
     public func summarizeCodexSessions(
         root: URL,
         range: DateInterval,
+        additionalFiles: [URL] = [],
         calendar: Calendar = .current
     ) -> TokenUsageSummary {
-        let urls = sessionURLs(in: root, range: range, calendar: calendar)
+        let urls = sessionURLs(in: root, range: range, calendar: calendar) + additionalFiles
         return summarize(files: urls, range: range)
     }
 
@@ -79,7 +80,7 @@ public struct TokenUsageReader {
         var latestContextWindow: Int?
         var latestContextWindowTimestamp: Date?
 
-        for url in files {
+        for url in uniqueFiles(files) {
             guard !Task.isCancelled else { break }
             guard FileManager.default.fileExists(atPath: url.path),
                   let content = try? String(contentsOf: url, encoding: .utf8)
@@ -127,6 +128,17 @@ public struct TokenUsageReader {
             eventCount: eventCount,
             latestContextWindow: latestContextWindow
         )
+    }
+
+    private func uniqueFiles(_ files: [URL]) -> [URL] {
+        var seen = Set<String>()
+        var unique: [URL] = []
+        for url in files {
+            let path = url.standardizedFileURL.path
+            guard seen.insert(path).inserted else { continue }
+            unique.append(url)
+        }
+        return unique
     }
 
     private func sessionURLs(in root: URL, range: DateInterval, calendar: Calendar) -> [URL] {

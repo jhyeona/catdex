@@ -167,6 +167,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             onResetRange: { [weak self] in
                 self?.resetUsageRange(preservingOpenMenu: true)
+            },
+            onSetSessionsFolder: { [weak self, weak menu] in
+                menu?.cancelTracking()
+                DispatchQueue.main.async {
+                    self?.openCodexSessionsFolderPicker()
+                }
+            },
+            onResetSessionsFolder: { [weak self] in
+                self?.resetCodexSessionsFolder(preservingOpenMenu: true)
             }
         )
         activeUsageView = view
@@ -202,6 +211,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         return UsageMenuSnapshot(
             range: "\(formatDay(range.startDay)) - \(formatDay(range.endDay))",
+            sessionsPath: displayPath(codexSessionsRoot()),
             updated: updated,
             sessionsAndEvents: "\(summary.sessionCount) · \(summary.eventCount)",
             total: formatTokens(summary.totals.totalTokens),
@@ -372,6 +382,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         performUsageRefresh(clearExistingSummary: true, preservingOpenMenu: preservingOpenMenu)
     }
 
+    private func openCodexSessionsFolderPicker() {
+        let panel = NSOpenPanel()
+        panel.title = "Choose Codex Sessions Folder"
+        panel.message = "Select the folder that contains Codex JSONL session files."
+        panel.prompt = "Use Folder"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = codexSessionsRoot()
+
+        NSApp.activate(ignoringOtherApps: true)
+        guard panel.runModal() == .OK,
+              let url = panel.url
+        else {
+            return
+        }
+
+        do {
+            try iconStore.setCodexSessionsPath(url.path)
+            performUsageRefresh(clearExistingSummary: true)
+        } catch {
+            NSSound.beep()
+        }
+    }
+
+    private func resetCodexSessionsFolder(preservingOpenMenu: Bool) {
+        do {
+            try iconStore.resetCodexSessionsPath()
+            performUsageRefresh(clearExistingSummary: true, preservingOpenMenu: preservingOpenMenu)
+        } catch {
+            NSSound.beep()
+        }
+    }
+
     @objc private func toggleHourlyUsageRefresh() {
         let nextValue = !iconStore.hourlyTokenUsageRefreshEnabled()
         try? iconStore.setHourlyTokenUsageRefreshEnabled(nextValue)
@@ -473,6 +517,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let range = iconStore.tokenUsageRange()
         let root = codexSessionsRoot()
         let interval = range.interval
+        let additionalFiles = codexSessionFilesFromCatdexState()
         usageRefreshGeneration += 1
         let generation = usageRefreshGeneration
 
@@ -484,10 +529,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         tokenUsageIsRefreshing = true
         updateUsageDisplay(preservingOpenMenu: preservingOpenMenu)
 
-        usageRefreshTask = Task.detached(priority: .utility) { [root, interval, generation, preservingOpenMenu] in
+        usageRefreshTask = Task.detached(priority: .utility) { [root, interval, additionalFiles, generation, preservingOpenMenu] in
             let summary = TokenUsageReader().summarizeCodexSessions(
                 root: root,
-                range: interval
+                range: interval,
+                additionalFiles: additionalFiles
             )
 
             guard !Task.isCancelled else {
@@ -532,17 +578,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func codexSessionsRoot() -> URL {
+        if let path = iconStore.codexSessionsPath() {
+            return URL(fileURLWithPath: path, isDirectory: true)
+        }
         let codexHome = ProcessInfo.processInfo.environment["CODEX_HOME"]
             .map { URL(fileURLWithPath: $0, isDirectory: true) }
             ?? FileManager.default.homeDirectoryForCurrentUser
                 .appendingPathComponent(".codex", isDirectory: true)
         return codexHome.appendingPathComponent("sessions", isDirectory: true)
     }
+
+    private func codexSessionFilesFromCatdexState() -> [URL] {
+        store.loadSessions().compactMap { session in
+            guard let path = session.codexSessionPath else { return nil }
+            return URL(fileURLWithPath: path)
+        }
+    }
+
+    private func displayPath(_ url: URL) -> String {
+        let path = url.path
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        if path == home {
+            return "~"
+        }
+        if path.hasPrefix(home + "/") {
+            return "~" + path.dropFirst(home.count)
+        }
+        return path
+    }
 }
 
 @MainActor
 private struct UsageMenuSnapshot {
     var range: String
+    var sessionsPath: String
     var updated: String
     var sessionsAndEvents: String
     var total: String
@@ -555,7 +624,12 @@ private struct UsageMenuSnapshot {
 
 @MainActor
 private final class UsageMenuView: NSView {
+    private static let viewWidth: CGFloat = 310
+    private static let contentWidth: CGFloat = 282
+
+    private let stack = NSStackView()
     private let rangeValue = NSTextField(labelWithString: "")
+    private let sessionsPathValue = NSTextField(labelWithString: "")
     private let updatedValue = NSTextField(labelWithString: "")
     private let sessionsValue = NSTextField(labelWithString: "")
     private let totalValue = NSTextField(labelWithString: "")
@@ -569,6 +643,8 @@ private final class UsageMenuView: NSView {
     private let onToggleHourlyRefresh: @MainActor () -> Void
     private let onSetRange: @MainActor () -> Void
     private let onResetRange: @MainActor () -> Void
+    private let onSetSessionsFolder: @MainActor () -> Void
+    private let onResetSessionsFolder: @MainActor () -> Void
 
     init(
         snapshot: UsageMenuSnapshot,
@@ -576,16 +652,19 @@ private final class UsageMenuView: NSView {
         onRefresh: @escaping @MainActor () -> Void,
         onToggleHourlyRefresh: @escaping @MainActor () -> Void,
         onSetRange: @escaping @MainActor () -> Void,
-        onResetRange: @escaping @MainActor () -> Void
+        onResetRange: @escaping @MainActor () -> Void,
+        onSetSessionsFolder: @escaping @MainActor () -> Void,
+        onResetSessionsFolder: @escaping @MainActor () -> Void
     ) {
         self.onRefresh = onRefresh
         self.onToggleHourlyRefresh = onToggleHourlyRefresh
         self.onSetRange = onSetRange
         self.onResetRange = onResetRange
+        self.onSetSessionsFolder = onSetSessionsFolder
+        self.onResetSessionsFolder = onResetSessionsFolder
         hourlyButton = NSButton(checkboxWithTitle: "Hourly Refresh", target: nil, action: nil)
-        super.init(frame: NSRect(x: 0, y: 0, width: 270, height: 270))
+        super.init(frame: NSRect(x: 0, y: 0, width: Self.viewWidth, height: 1))
 
-        let stack = NSStackView()
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 6
@@ -593,7 +672,12 @@ private final class UsageMenuView: NSView {
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
 
+        hourlyButton.target = self
+        hourlyButton.action = #selector(toggleHourlyRefresh)
+        hourlyButton.refusesFirstResponder = true
+
         stack.addArrangedSubview(makeRow("Range", rangeValue))
+        stack.addArrangedSubview(makeRow("Path", sessionsPathValue))
         stack.addArrangedSubview(makeRow("Updated", updatedValue))
         stack.addArrangedSubview(makeRow("Sessions · Events", sessionsValue))
         stack.addArrangedSubview(separator())
@@ -605,32 +689,36 @@ private final class UsageMenuView: NSView {
         stack.addArrangedSubview(makeRow("Context window", contextValue))
         stack.addArrangedSubview(separator())
         stack.addArrangedSubview(makeButton("Refresh Usage", action: #selector(refreshUsage)))
-
-        hourlyButton.target = self
-        hourlyButton.action = #selector(toggleHourlyRefresh)
-        hourlyButton.refusesFirstResponder = true
-        stack.addArrangedSubview(hourlyButton)
-
-        stack.addArrangedSubview(makeButton("Set Usage Range...", action: #selector(setUsageRange)))
         stack.addArrangedSubview(makeButton("Reset Usage Range (30 Days)", action: #selector(resetUsageRange)))
+        stack.addArrangedSubview(makeButton("Set Usage Range...", action: #selector(setUsageRange)))
+        stack.addArrangedSubview(makeButton("Reset Sessions Folder", action: #selector(resetSessionsFolder)))
+        stack.addArrangedSubview(makeButton("Set Sessions Folder...", action: #selector(setSessionsFolder)))
+        stack.addArrangedSubview(hourlyButton)
 
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: trailingAnchor),
             stack.topAnchor.constraint(equalTo: topAnchor),
             stack.bottomAnchor.constraint(equalTo: bottomAnchor),
-            widthAnchor.constraint(equalToConstant: 270)
+            widthAnchor.constraint(equalToConstant: Self.viewWidth)
         ])
 
         update(snapshot: snapshot, hourlyRefreshEnabled: hourlyRefreshEnabled)
+        frame.size = intrinsicContentSize
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
 
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: Self.viewWidth, height: ceil(stack.fittingSize.height))
+    }
+
     func update(snapshot: UsageMenuSnapshot, hourlyRefreshEnabled: Bool) {
         rangeValue.stringValue = snapshot.range
+        sessionsPathValue.stringValue = snapshot.sessionsPath
+        sessionsPathValue.toolTip = snapshot.sessionsPath
         updatedValue.stringValue = snapshot.updated
         sessionsValue.stringValue = snapshot.sessionsAndEvents
         totalValue.stringValue = snapshot.total
@@ -640,6 +728,8 @@ private final class UsageMenuView: NSView {
         reasoningValue.stringValue = snapshot.reasoning
         contextValue.stringValue = snapshot.contextWindow ?? "-"
         hourlyButton.state = hourlyRefreshEnabled ? .on : .off
+        invalidateIntrinsicContentSize()
+        frame.size = intrinsicContentSize
         needsLayout = true
         needsDisplay = true
     }
@@ -660,6 +750,7 @@ private final class UsageMenuView: NSView {
 
         row.addArrangedSubview(titleLabel)
         row.addArrangedSubview(valueLabel)
+        row.widthAnchor.constraint(equalToConstant: Self.contentWidth).isActive = true
         return row
     }
 
@@ -669,6 +760,7 @@ private final class UsageMenuView: NSView {
         button.isBordered = false
         button.alignment = .left
         button.refusesFirstResponder = true
+        button.widthAnchor.constraint(equalToConstant: Self.contentWidth).isActive = true
         return button
     }
 
@@ -676,7 +768,7 @@ private final class UsageMenuView: NSView {
         let box = NSBox()
         box.boxType = .separator
         box.translatesAutoresizingMaskIntoConstraints = false
-        box.widthAnchor.constraint(equalToConstant: 242).isActive = true
+        box.widthAnchor.constraint(equalToConstant: Self.contentWidth).isActive = true
         return box
     }
 
@@ -694,6 +786,14 @@ private final class UsageMenuView: NSView {
 
     @objc private func resetUsageRange() {
         onResetRange()
+    }
+
+    @objc private func setSessionsFolder() {
+        onSetSessionsFolder()
+    }
+
+    @objc private func resetSessionsFolder() {
+        onResetSessionsFolder()
     }
 }
 
@@ -726,6 +826,7 @@ final class SessionContextPopoverController {
             popover.close()
         }
         popover.show(relativeTo: sourceView.bounds, of: sourceView, preferredEdge: .maxX)
+        popover.contentViewController?.view.window?.makeFirstResponder(nil)
     }
 }
 
@@ -825,6 +926,7 @@ final class SessionContextViewController: NSViewController {
         editTitleButton.action = #selector(beginTitleEdit)
         editTitleButton.bezelStyle = .inline
         editTitleButton.isBordered = false
+        editTitleButton.refusesFirstResponder = true
         editTitleButton.toolTip = "Rename"
         editTitleButton.setContentHuggingPriority(.required, for: .horizontal)
         if let image = NSImage(systemSymbolName: "pencil", accessibilityDescription: "Rename") {
@@ -849,6 +951,7 @@ final class SessionContextViewController: NSViewController {
         let button = NSButton(title: "", target: self, action: #selector(closePopover))
         button.bezelStyle = .inline
         button.isBordered = false
+        button.refusesFirstResponder = true
         button.toolTip = "Close"
         button.setContentHuggingPriority(.required, for: .horizontal)
         if let image = NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: "Close") {
@@ -916,6 +1019,7 @@ final class SessionContextViewController: NSViewController {
         button.bezelStyle = .rounded
         button.controlSize = .small
         button.isEnabled = isEnabled
+        button.refusesFirstResponder = true
         return button
     }
 
@@ -939,10 +1043,14 @@ final class SessionContextViewController: NSViewController {
             ("Text", context.lastUserMessage?.detail ?? "No user question found.")
         ]))
 
-        sections.append(formatSection("LAST ASSISTANT ANSWER", [
-            ("Time", formattedTime(context.lastAssistantMessage?.timestamp)),
-            ("Text", finalAnswerResult(context.lastAssistantMessage?.detail) ?? "No assistant final answer after the last question yet.")
-        ]))
+        sections.append(formatSection(
+            "LAST ASSISTANT ANSWER",
+            [
+                ("Time", formattedTime(context.lastAssistantMessage?.timestamp)),
+                ("Text", finalAnswerResult(context.lastAssistantMessage?.detail) ?? "No assistant final answer after the last question yet.")
+            ],
+            unindentedMultilineKeys: ["Text"]
+        ))
 
         var paths: [(String, String)] = [
             ("Workspace", session.workspace)
@@ -990,11 +1098,18 @@ final class SessionContextViewController: NSViewController {
         return result.isEmpty ? answer : result
     }
 
-    private func formatSection(_ title: String, _ rows: [(String, String)]) -> String {
+    private func formatSection(
+        _ title: String,
+        _ rows: [(String, String)],
+        unindentedMultilineKeys: Set<String> = []
+    ) -> String {
         let maxKeyLength = max(1, rows.map { $0.0.count }.max() ?? 1)
         let body = rows.map { key, value in
             let paddedKey = key.padding(toLength: maxKeyLength, withPad: " ", startingAt: 0)
-            let formattedValue = value.replacingOccurrences(of: "\n", with: "\n\(String(repeating: " ", count: maxKeyLength + 3))")
+            let continuationPrefix = unindentedMultilineKeys.contains(key)
+                ? "\n"
+                : "\n\(String(repeating: " ", count: maxKeyLength + 3))"
+            let formattedValue = value.replacingOccurrences(of: "\n", with: continuationPrefix)
             return "\(paddedKey) : \(formattedValue)"
         }.joined(separator: "\n")
         return "[\(title)]\n\(body)"
@@ -1077,6 +1192,7 @@ private struct IconSettings: Codable {
     var floatingPanelOrigin: PanelOrigin?
     var tokenUsageRange: UsageDateRangeSetting?
     var hourlyTokenUsageRefreshEnabled: Bool?
+    var codexSessionsPath: String?
     var sessionTaskOverrides: [String: String] = [:]
 
     enum CodingKeys: String, CodingKey {
@@ -1085,6 +1201,7 @@ private struct IconSettings: Codable {
         case floatingPanelOrigin
         case tokenUsageRange
         case hourlyTokenUsageRefreshEnabled
+        case codexSessionsPath
         case sessionTaskOverrides
     }
 
@@ -1100,6 +1217,7 @@ private struct IconSettings: Codable {
             Bool.self,
             forKey: .hourlyTokenUsageRefreshEnabled
         )
+        codexSessionsPath = try container.decodeIfPresent(String.self, forKey: .codexSessionsPath)
         sessionTaskOverrides = try container.decodeIfPresent(
             [String: String].self,
             forKey: .sessionTaskOverrides
@@ -1116,6 +1234,7 @@ private struct IconSettings: Codable {
             hourlyTokenUsageRefreshEnabled,
             forKey: .hourlyTokenUsageRefreshEnabled
         )
+        try container.encodeIfPresent(codexSessionsPath, forKey: .codexSessionsPath)
         try container.encode(sessionTaskOverrides, forKey: .sessionTaskOverrides)
     }
 }
@@ -1176,6 +1295,30 @@ final class IconSettingsStore {
 
     func setHourlyTokenUsageRefreshEnabled(_ isEnabled: Bool) throws {
         settings.hourlyTokenUsageRefreshEnabled = isEnabled
+        try save()
+    }
+
+    func codexSessionsPath() -> String? {
+        guard let path = settings.codexSessionsPath?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !path.isEmpty
+        else {
+            return nil
+        }
+        return path
+    }
+
+    func setCodexSessionsPath(_ path: String) throws {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            settings.codexSessionsPath = nil
+        } else {
+            settings.codexSessionsPath = trimmed
+        }
+        try save()
+    }
+
+    func resetCodexSessionsPath() throws {
+        settings.codexSessionsPath = nil
         try save()
     }
 

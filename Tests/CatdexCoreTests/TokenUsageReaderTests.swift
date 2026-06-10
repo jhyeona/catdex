@@ -56,6 +56,26 @@ final class TokenUsageReaderTests: XCTestCase {
         XCTAssertEqual(summary.eventCount, 1)
     }
 
+    func testSummarizeDeduplicatesFiles() throws {
+        let jsonl = try makeJSONL([
+            tokenLine(
+                timestamp: "2026-06-01T00:00:01Z",
+                total: (input: 100, cached: 0, output: 20, reasoning: 0, total: 120),
+                last: (input: 100, cached: 0, output: 20, reasoning: 0, total: 120)
+            )
+        ])
+        let range = DateInterval(
+            start: iso("2026-06-01T00:00:00Z"),
+            end: iso("2026-06-02T00:00:00Z")
+        )
+
+        let summary = TokenUsageReader().summarize(files: [jsonl, jsonl], range: range)
+
+        XCTAssertEqual(summary.totals.totalTokens, 120)
+        XCTAssertEqual(summary.sessionCount, 1)
+        XCTAssertEqual(summary.eventCount, 1)
+    }
+
     func testSummarizeSkipsDuplicateTotalUsageAcrossRangeStart() throws {
         let beforeRange = tokenLine(
             timestamp: "2026-05-31T23:59:59Z",

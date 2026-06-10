@@ -117,7 +117,7 @@ Use the upper-right close button, press `Esc`, or click outside the popover to d
 
 Open the menu bar item and choose `Token Usage`.
 
-Catdex reads `token_count` events from Codex JSONL session files under `~/.codex/sessions`. It totals the `last_token_usage` values in the selected date range and skips repeated events when the cumulative `total_token_usage.total_tokens` value has not changed.
+Catdex reads `token_count` events from Codex JSONL session files under `~/.codex/sessions`, or from the custom sessions folder selected in the Token Usage menu. It also includes Codex session files recorded in Catdex session state. It totals the `last_token_usage` values in the selected date range and skips repeated events when the cumulative `total_token_usage.total_tokens` value has not changed.
 
 The default date range is the last 30 days, including today.
 
@@ -126,6 +126,7 @@ Usage is calculated in the background when `CatdexMenu.app` starts, when the ran
 The submenu shows:
 
 - `Range`: selected start and end dates
+- `Path`: Codex sessions folder currently being scanned
 - `Sessions`: number of tracked sessions with usage in the range
 - `Events`: number of counted `token_count` events
 - `Total`, `Input`, `Cached`, `Output`, `Reasoning`
@@ -133,10 +134,12 @@ The submenu shows:
 
 Use:
 
-- `Refresh Usage`: rescan Codex session files for the selected range
 - `Hourly Refresh`: turn the 1-hour automatic rescan on or off
+- `Refresh Usage`: rescan Codex session files for the selected range
 - `Set Usage Range...`: open a date-range window and choose start/end dates
 - `Reset Usage Range (30 Days)`: clear the custom range and use the default 30-day range
+- `Set Sessions Folder...`: choose a custom Codex sessions folder
+- `Reset Sessions Folder`: use `$CODEX_HOME/sessions` when available, otherwise `~/.codex/sessions`
 
 The selected date range is saved in:
 
@@ -488,7 +491,7 @@ review > failed > stale > responding > starting/running > waiting
 
 메뉴바에서 `Token Usage`를 엽니다.
 
-`~/.codex/sessions` 아래 Codex JSONL 세션 파일의 `token_count` 이벤트를 읽습니다. 선택한 기간 안의 `last_token_usage` 값을 합산하고, 누적 `total_token_usage.total_tokens` 값이 직전 이벤트와 같으면 중복 이벤트로 보고 건너뜁니다.
+`~/.codex/sessions` 또는 Token Usage 메뉴에서 직접 선택한 sessions 폴더 아래 Codex JSONL 세션 파일의 `token_count` 이벤트를 읽습니다. Catdex 세션 상태에 기록된 Codex 세션 파일도 함께 포함합니다. 선택한 기간 안의 `last_token_usage` 값을 합산하고, 누적 `total_token_usage.total_tokens` 값이 직전 이벤트와 같으면 중복 이벤트로 보고 건너뜁니다.
 
 기본 기간은 오늘을 포함한 최근 30일입니다.
 
@@ -497,6 +500,7 @@ review > failed > stale > responding > starting/running > waiting
 하위 메뉴에서 다음을 확인할 수 있습니다.
 
 - `Range`: 선택된 시작일과 종료일
+- `Path`: 현재 스캔 중인 Codex sessions 폴더
 - `Sessions`: 해당 기간에 사용량이 있는 세션 수
 - `Events`: 집계된 `token_count` 이벤트 수
 - `Total`, `Input`, `Cached`, `Output`, `Reasoning`
@@ -504,10 +508,12 @@ review > failed > stale > responding > starting/running > waiting
 
 사용 가능한 동작:
 
-- `Refresh Usage`: 선택한 기간의 Codex 세션 파일 다시 스캔
 - `Hourly Refresh`: 1시간 자동 재스캔 켜기/끄기
+- `Refresh Usage`: 선택한 기간의 Codex 세션 파일 다시 스캔
 - `Set Usage Range...`: 시작일/종료일을 직접 선택
 - `Reset Usage Range (30 Days)`: 직접 설정한 기간을 지우고 기본 30일로 복구
+- `Set Sessions Folder...`: Codex sessions 폴더 직접 선택
+- `Reset Sessions Folder`: `$CODEX_HOME/sessions`가 있으면 사용하고, 없으면 `~/.codex/sessions` 사용
 
 선택한 기간은 여기에 저장됩니다.
 
