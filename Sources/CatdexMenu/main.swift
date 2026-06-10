@@ -443,7 +443,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func formatDay(_ date: Date) -> String {
         let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.dateFormat = "yy-MM-dd"
         return formatter.string(from: date)
     }
 
