@@ -607,9 +607,12 @@ final class CodexEventMonitor {
             case ("response_item", "message"):
                 let role = payload["role"] as? String
                 let phase = payload["phase"] as? String
-                if phase == "final_answer" || role == "assistant" {
+                if phase == "final_answer" {
                     state = .waiting
                     message = "👀 Answer complete; waiting"
+                } else if role == "assistant" {
+                    state = .responding
+                    message = "✍️ Updating progress"
                 }
 
             case ("event_msg", "task_complete"):
