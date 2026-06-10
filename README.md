@@ -42,6 +42,7 @@ Catdex gives you a small ambient dashboard for local Codex work:
 | Stale detection | Marks active sessions stale when heartbeat updates stop |
 | Session context | Click a floating-panel cell to inspect the latest prompt, final answer, paths, and actions |
 | Session actions | Open workspace, log, copy context, or reveal session JSON |
+| Token usage | Review token totals for a configurable date range, defaulting to the last 30 days |
 | Cleanup tools | `catdex cleanup` and `catdex doctor` included |
 
 ## Requirements
@@ -91,11 +92,7 @@ catdex "review the API changes"
 catdex --model gpt-5.4 "debug the reminder job"
 ```
 
-Set a display name without changing the Codex prompt:
-
-```bash
-catdex --task "API review" --model gpt-5.4
-```
+Catdex uses the current project folder as the initial display name. To rename it, click the pencil button in the floating-panel context popover and enter a new name.
 
 Use a custom Codex executable:
 
@@ -146,6 +143,21 @@ From the menu bar, use:
 
 - `Hide Floating Panel`
 - `Show Floating Panel`
+
+## Token Usage
+
+Open the menu bar item and choose `Token Usage`.
+
+Catdex totals `token_count` events from Codex session files under `~/.codex/sessions`. The default range is the last 30 days, including today. The submenu shows total, input, cached input, output, reasoning tokens, session count, and event count.
+
+Usage is calculated in the background when the menu app starts, when the date range changes, when a Catdex-launched session finishes, when you choose `Refresh Usage`, and once per hour while `Hourly Refresh` is enabled. Hourly refresh is on by default so sessions started outside Catdex are still picked up while the app is open.
+
+Use:
+
+- `Refresh Usage`: rescan Codex session files for the selected range
+- `Hourly Refresh`: turn the 1-hour automatic rescan on or off
+- `Set Usage Range...`: choose custom start and end dates
+- `Reset Usage Range (30 Days)`: return to the default 30-day range
 
 ## Custom Icons
 
@@ -328,6 +340,7 @@ Catdex는 로컬 Codex 작업을 위한 작은 상태판입니다.
 - 모든 Space 위에 떠 있는 작은 플로팅 패널
 - 세션별 상태 아이콘과 작업명 표시
 - 플로팅 패널에서 마지막 질문/최종 답변 컨텍스트 확인
+- 기본 30일 또는 직접 설정한 기간의 토큰 사용량 확인
 - `review` 상태에서 macOS 알림
 - 상태별 이모지/이미지 아이콘 커스터마이징
 - heartbeat가 끊기면 `stale`로 표시
@@ -363,11 +376,7 @@ catdex "API 변경사항 리뷰"
 catdex --model gpt-5.4 "리마인더 배치 디버깅"
 ```
 
-메뉴바에 보이는 이름만 따로 지정하려면:
-
-```bash
-catdex --task "API 리뷰" --model gpt-5.4
-```
+Catdex는 현재 프로젝트 폴더명을 초기 표시명으로 사용합니다. 이름을 바꾸려면 플로팅 패널 컨텍스트 팝오버의 연필 버튼을 클릭하고 새 이름을 입력합니다.
 
 ## 상태
 
@@ -407,6 +416,19 @@ review > failed > stale > responding > starting/running > waiting
 - `Log`: Catdex wrapper 로그 열기
 - `Copy Context`: 현재 팝오버 내용을 클립보드에 복사
 - `Reveal JSON`: Catdex 세션 JSON을 Finder에서 선택
+
+## 토큰 사용량
+
+메뉴바 고양이 아이콘을 클릭한 뒤 `Token Usage`를 엽니다.
+
+`~/.codex/sessions` 아래 Codex 세션 파일의 `token_count` 이벤트를 합산합니다. 기본 기간은 오늘을 포함한 최근 30일입니다. 하위 메뉴에서 total, input, cached input, output, reasoning 토큰과 세션 수, 이벤트 수를 확인할 수 있습니다.
+
+사용량은 메뉴 앱 시작 시, 기간 변경 시, catdex로 실행한 세션이 끝났을 때, `Refresh Usage`를 선택했을 때, 그리고 `Hourly Refresh`가 켜져 있으면 1시간마다 백그라운드에서 다시 계산합니다. 앱을 열어둔 동안 catdex 밖에서 실행한 Codex 세션도 잡기 위해 기본값은 켜짐입니다.
+
+- `Refresh Usage`: 선택한 기간의 Codex 세션 파일 다시 스캔
+- `Hourly Refresh`: 1시간 자동 재스캔 켜기/끄기
+- `Set Usage Range...`: 시작일과 종료일 직접 설정
+- `Reset Usage Range (30 Days)`: 기본 30일 범위로 복구
 
 ## 아이콘 설정
 

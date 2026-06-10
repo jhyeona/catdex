@@ -74,6 +74,7 @@ Session submenu actions:
 
 Menu actions:
 
+- `Token Usage`: review token totals for the selected date range
 - `Hide Floating Panel` / `Show Floating Panel`
 - `Settings...`
 - `Open Status Folder`
@@ -112,6 +113,37 @@ Popover actions:
 
 Use the upper-right close button, press `Esc`, or click outside the popover to dismiss it.
 
+## Token Usage
+
+Open the menu bar item and choose `Token Usage`.
+
+Catdex reads `token_count` events from Codex JSONL session files under `~/.codex/sessions`. It totals the `last_token_usage` values in the selected date range and skips repeated events when the cumulative `total_token_usage.total_tokens` value has not changed.
+
+The default date range is the last 30 days, including today.
+
+Usage is calculated in the background when `CatdexMenu.app` starts, when the range changes, when a Catdex-launched session changes from active to finished, when you choose `Refresh Usage`, and once per hour while `Hourly Refresh` is enabled. Hourly refresh is on by default so Codex sessions started outside Catdex are picked up while the app is open. The normal `Refresh` menu item only refreshes session state unless it detects a session finishing.
+
+The submenu shows:
+
+- `Range`: selected start and end dates
+- `Sessions`: number of tracked sessions with usage in the range
+- `Events`: number of counted `token_count` events
+- `Total`, `Input`, `Cached`, `Output`, `Reasoning`
+- `Context window`: latest model context window reported by Codex
+
+Use:
+
+- `Refresh Usage`: rescan Codex session files for the selected range
+- `Hourly Refresh`: turn the 1-hour automatic rescan on or off
+- `Set Usage Range...`: open a date-range window and choose start/end dates
+- `Reset Usage Range (30 Days)`: clear the custom range and use the default 30-day range
+
+The selected date range is saved in:
+
+```text
+~/.codex/cat-status/settings.json
+```
+
 ## Custom Status Icons
 
 Open the menu bar item and choose `Settings...`.
@@ -145,7 +177,9 @@ catdex
 catdex "investigate duplicate reminders"
 ```
 
-If you run `catdex` without a prompt, the current folder name is used as the task name. If you pass a prompt, the prompt is forwarded to Codex and also used as the displayed task name.
+Catdex uses the current project folder as the initial task name. Prompts are forwarded to Codex, but they do not change the displayed task name.
+
+To rename the displayed task, click a floating-panel cell, then click the pencil button in the context popover and enter a new name. The edited name is stored in Catdex session state and is used by the menu, floating panel, and popover.
 
 The wrapper does this:
 
@@ -171,11 +205,7 @@ Use a custom Codex executable:
 catdex --codex-bin /path/to/codex "review the API"
 ```
 
-Set only the displayed task name:
-
-```bash
-catdex --task "API review" --model gpt-5.4
-```
+`--task` is accepted for compatibility, but display names are edited from CatdexMenu.
 
 ## States
 
@@ -417,6 +447,7 @@ review > failed > stale > responding > starting/running > waiting
 
 메뉴 하단:
 
+- `Token Usage`: 선택한 기간의 토큰 사용량 확인
 - `Hide Floating Panel` / `Show Floating Panel`
 - `Settings...`
 - `Open Status Folder`
@@ -453,6 +484,37 @@ review > failed > stale > responding > starting/running > waiting
 
 작업명은 칸 안에서 잘립니다. 패널 배경이나 셀을 잡고 드래그할 수 있습니다.
 
+## 토큰 사용량
+
+메뉴바에서 `Token Usage`를 엽니다.
+
+`~/.codex/sessions` 아래 Codex JSONL 세션 파일의 `token_count` 이벤트를 읽습니다. 선택한 기간 안의 `last_token_usage` 값을 합산하고, 누적 `total_token_usage.total_tokens` 값이 직전 이벤트와 같으면 중복 이벤트로 보고 건너뜁니다.
+
+기본 기간은 오늘을 포함한 최근 30일입니다.
+
+사용량은 `CatdexMenu.app` 시작 시, 기간 변경 시, catdex로 실행한 세션이 active에서 finished로 바뀌었을 때, `Refresh Usage`를 선택했을 때, 그리고 `Hourly Refresh`가 켜져 있으면 1시간마다 백그라운드에서 계산합니다. 앱을 열어둔 동안 catdex 밖에서 실행한 Codex 세션도 잡기 위해 기본값은 켜짐입니다. 일반 `Refresh` 메뉴는 세션 상태만 새로고침하지만 세션 종료 전이가 감지되면 사용량도 갱신합니다.
+
+하위 메뉴에서 다음을 확인할 수 있습니다.
+
+- `Range`: 선택된 시작일과 종료일
+- `Sessions`: 해당 기간에 사용량이 있는 세션 수
+- `Events`: 집계된 `token_count` 이벤트 수
+- `Total`, `Input`, `Cached`, `Output`, `Reasoning`
+- `Context window`: Codex가 마지막으로 보고한 model context window
+
+사용 가능한 동작:
+
+- `Refresh Usage`: 선택한 기간의 Codex 세션 파일 다시 스캔
+- `Hourly Refresh`: 1시간 자동 재스캔 켜기/끄기
+- `Set Usage Range...`: 시작일/종료일을 직접 선택
+- `Reset Usage Range (30 Days)`: 직접 설정한 기간을 지우고 기본 30일로 복구
+
+선택한 기간은 여기에 저장됩니다.
+
+```text
+~/.codex/cat-status/settings.json
+```
+
 ## 상태 아이콘 설정
 
 메뉴바에서 `Settings...`를 엽니다.
@@ -486,7 +548,9 @@ catdex
 catdex "배치 중복 발송 조사"
 ```
 
-`catdex`만 실행하면 현재 폴더명이 세션 이름이 됩니다. 프롬프트를 넘기면 Codex에 그대로 전달하고, 메뉴에 보이는 작업명으로도 사용합니다.
+Catdex는 현재 프로젝트 폴더명을 초기 작업명으로 사용합니다. 프롬프트는 Codex에 그대로 전달하지만 메뉴에 보이는 작업명은 바꾸지 않습니다.
+
+표시 작업명을 바꾸려면 플로팅 패널 셀을 클릭한 뒤 컨텍스트 팝오버의 연필 버튼을 클릭하고 새 이름을 입력합니다. 수정한 이름은 Catdex 세션 상태에 저장되고 메뉴, 플로팅 패널, 팝오버에 함께 적용됩니다.
 
 Codex 옵션은 그대로 넘길 수 있습니다.
 
@@ -500,11 +564,7 @@ Codex 실행 파일 경로를 직접 지정:
 catdex --codex-bin /path/to/codex "API 리뷰"
 ```
 
-메뉴바 표시 이름만 지정:
-
-```bash
-catdex --task "API 리뷰" --model gpt-5.4
-```
+`--task`는 호환성을 위해 허용하지만 표시명은 CatdexMenu에서 수정합니다.
 
 ## 상태
 
