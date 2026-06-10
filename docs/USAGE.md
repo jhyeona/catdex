@@ -68,7 +68,7 @@ Session submenu actions:
 
 - `Open Workspace`: open the working directory
 - `Open Log`: open the internal Catdex log
-- `Open Codex Session`: open the Codex JSONL session file
+- `Open Codex Session`: open the Codex JSONL session file from the menu submenu
 - `Reveal Session JSON`: select the Catdex session JSON in Finder
 - `Dismiss`: remove a finished session from the list
 
@@ -95,6 +95,22 @@ task
 ```
 
 The task name is clipped inside the cell so the panel stays small. Drag the panel by its background or cells to move it.
+
+Click a session cell to open a context popover. The popover shows:
+
+- `CURRENT`: state, last status message, and update time
+- `LAST USER QUESTION`: the latest user prompt seen in the Codex session file
+- `LAST ASSISTANT ANSWER`: the latest assistant `final_answer`; if it contains a divider, Catdex shows only the final result after the last divider
+- `PATHS`: workspace, log, and Codex session paths
+
+Popover actions:
+
+- `Workspace`: open the working directory
+- `Log`: open the Catdex wrapper log
+- `Copy Context`: copy the displayed context to the clipboard
+- `Reveal JSON`: select the Catdex session JSON in Finder
+
+Use the upper-right close button, press `Esc`, or click outside the popover to dismiss it.
 
 ## Custom Status Icons
 
@@ -395,7 +411,7 @@ review > failed > stale > responding > starting/running > waiting
 
 - `Open Workspace`: 작업 폴더 열기
 - `Open Log`: Catdex 내부 로그 열기
-- `Open Codex Session`: Codex JSONL 세션 파일 열기
+- `Open Codex Session`: 메뉴 하위 항목에서 Codex JSONL 세션 파일 열기
 - `Reveal Session JSON`: 세션 상태 파일을 Finder에서 선택
 - `Dismiss`: 완료된 세션 제거
 
@@ -418,6 +434,22 @@ review > failed > stale > responding > starting/running > waiting
 아이콘
 작업명
 ```
+
+세션 셀을 클릭하면 컨텍스트 팝오버가 열립니다.
+
+- `CURRENT`: 상태, 마지막 상태 메시지, 갱신 시각
+- `LAST USER QUESTION`: Codex 세션 파일에서 읽은 마지막 사용자 질문
+- `LAST ASSISTANT ANSWER`: 마지막 assistant `final_answer`; 구분선이 있으면 마지막 구분선 뒤의 최종 결과만 표시
+- `PATHS`: workspace, log, Codex session 경로
+
+팝오버 버튼:
+
+- `Workspace`: 작업 폴더 열기
+- `Log`: Catdex wrapper 로그 열기
+- `Copy Context`: 표시 중인 컨텍스트를 클립보드에 복사
+- `Reveal JSON`: Catdex 세션 JSON을 Finder에서 선택
+
+우측 상단 닫기 버튼, `Esc`, 또는 바깥 클릭으로 닫을 수 있습니다.
 
 작업명은 칸 안에서 잘립니다. 패널 배경이나 셀을 잡고 드래그할 수 있습니다.
 

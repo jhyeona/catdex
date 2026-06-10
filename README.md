@@ -40,7 +40,8 @@ Catdex gives you a small ambient dashboard for local Codex work:
 | Review alerts | Sends a macOS notification when Codex needs confirmation |
 | Custom icons | Use emoji, PNG, SVG, PDF, ICNS, JPG, GIF, TIFF, BMP |
 | Stale detection | Marks active sessions stale when heartbeat updates stop |
-| Session actions | Open workspace, log, Codex JSONL, or reveal session JSON |
+| Session context | Click a floating-panel cell to inspect the latest prompt, final answer, paths, and actions |
+| Session actions | Open workspace, log, copy context, or reveal session JSON |
 | Cleanup tools | `catdex cleanup` and `catdex doctor` included |
 
 ## Requirements
@@ -134,6 +135,13 @@ task
 
 Task names are clipped inside each cell, keeping the whole panel small. Drag the panel by its background or cells to move it.
 
+Click a session cell to open a context popover. It shows the current state, last user question, last assistant final answer, workspace/log paths, and action buttons:
+
+- `Workspace`: open the working directory
+- `Log`: open the Catdex wrapper log
+- `Copy Context`: copy the displayed context to the clipboard
+- `Reveal JSON`: select the Catdex session JSON in Finder
+
 From the menu bar, use:
 
 - `Hide Floating Panel`
@@ -193,6 +201,7 @@ catdex command
 CatdexMenu.app
    │
    ├─ reads session JSON files
+   ├─ reads Codex JSONL for panel context
    ├─ prunes old finished sessions
    ├─ marks lost-heartbeat sessions as stale
    └─ renders the menu bar item and floating panel
@@ -318,6 +327,7 @@ Catdex는 로컬 Codex 작업을 위한 작은 상태판입니다.
 - 메뉴바에서 상태를 빠르게 확인
 - 모든 Space 위에 떠 있는 작은 플로팅 패널
 - 세션별 상태 아이콘과 작업명 표시
+- 플로팅 패널에서 마지막 질문/최종 답변 컨텍스트 확인
 - `review` 상태에서 macOS 알림
 - 상태별 이모지/이미지 아이콘 커스터마이징
 - heartbeat가 끊기면 `stale`로 표시
@@ -390,6 +400,13 @@ review > failed > stale > responding > starting/running > waiting
 ```
 
 작업명은 칸 너비 안에서 잘립니다. 패널 배경이나 셀을 잡고 드래그할 수 있습니다.
+
+세션 셀을 클릭하면 컨텍스트 팝오버가 열립니다. 현재 상태, 마지막 사용자 질문, 마지막 assistant 최종 답변, workspace/log 경로와 액션 버튼을 확인할 수 있습니다.
+
+- `Workspace`: 작업 폴더 열기
+- `Log`: Catdex wrapper 로그 열기
+- `Copy Context`: 현재 팝오버 내용을 클립보드에 복사
+- `Reveal JSON`: Catdex 세션 JSON을 Finder에서 선택
 
 ## 아이콘 설정
 
