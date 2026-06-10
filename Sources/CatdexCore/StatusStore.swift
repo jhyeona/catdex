@@ -34,6 +34,16 @@ public struct StatusStore: Sendable {
         paths.logsDirectory.appendingPathComponent("\(id).log")
     }
 
+    public func loadSession(id: String) -> CatdexSession? {
+        let url = sessionURL(for: id)
+        guard let data = try? Data(contentsOf: url),
+              let session = try? decoder.decode(CatdexSession.self, from: data)
+        else {
+            return nil
+        }
+        return session
+    }
+
     public func save(_ session: CatdexSession) throws {
         try prepareDirectories()
         let target = sessionURL(for: session.id)
@@ -46,6 +56,12 @@ public struct StatusStore: Sendable {
         } else {
             try FileManager.default.moveItem(at: temporary, to: target)
         }
+    }
+
+    public func updateSession(id: String, mutate: (inout CatdexSession) -> Void) throws {
+        guard var session = loadSession(id: id) else { return }
+        mutate(&session)
+        try save(session)
     }
 
     public func loadSessions(now: Date = Date(), staleAfter: TimeInterval = 120) -> [CatdexSession] {

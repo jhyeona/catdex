@@ -141,6 +141,25 @@ final class StatusStoreTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: store.logURL(for: "done").path))
     }
 
+    func testUpdateSessionMutatesExistingSession() throws {
+        let root = try temporaryRoot()
+        let store = StatusStore(paths: CatdexPaths(root: root))
+        try store.save(CatdexSession(
+            id: "editable",
+            state: .waiting,
+            task: "Original",
+            workspace: "/tmp/project",
+            updatedAt: Date(),
+            lastMessage: "waiting"
+        ))
+
+        try store.updateSession(id: "editable") { session in
+            session.task = "Renamed"
+        }
+
+        XCTAssertEqual(store.loadSession(id: "editable")?.task, "Renamed")
+    }
+
     func testSessionIDContainsReadableSlug() {
         let id = SessionFactory.makeID(
             task: "API 테스트 수정!",

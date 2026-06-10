@@ -200,11 +200,9 @@ final class SessionRunner {
     init(options: CatdexOptions, store: StatusStore = StatusStore()) throws {
         self.options = options
         self.store = store
-        task = options.task
-            ?? SessionRunner.inferTask(from: options.codexArguments)
-            ?? URL(fileURLWithPath: FileManager.default.currentDirectoryPath).lastPathComponent
-        id = SessionFactory.makeID(task: task)
         workspace = FileManager.default.currentDirectoryPath
+        task = URL(fileURLWithPath: workspace).lastPathComponent
+        id = SessionFactory.makeID(task: task)
         branch = Git.currentBranch(in: workspace)
         logURL = store.logURL(for: id)
         session = CatdexSession(
@@ -408,6 +406,10 @@ final class SessionRunner {
         }
 
         let previousState = session.state
+        if let storedTask = store.loadSession(id: id)?.task,
+           !storedTask.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            session.task = storedTask
+        }
         session.state = state
         session.updatedAt = Date()
         session.pid = pid ?? session.pid
@@ -424,6 +426,10 @@ final class SessionRunner {
             sessionLock.unlock()
         }
 
+        if let storedTask = store.loadSession(id: id)?.task,
+           !storedTask.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            session.task = storedTask
+        }
         session.updatedAt = Date()
         session.pid = pid
         try store.save(session)
@@ -837,14 +843,13 @@ func printUsage() {
     Catdex options:
       --codex-bin <command>  Codex executable to run. Defaults to CATDEX_CODEX_BIN or codex.
       --dry-run             Create and finish a session without launching Codex.
-      --task <name>          Override the session name shown in CatdexMenu.
+      --task <name>          Accepted for compatibility. Rename the display title from CatdexMenu.
       -h, --help            Show catdex help. Use `catdex -- --help` for Codex help.
 
     Examples:
       catdex
       catdex "batch reminder debug"
       catdex --model gpt-5.4 "review API"
-      catdex --task "API review" --model gpt-5.4
       catdex cleanup
       catdex doctor
     """)
