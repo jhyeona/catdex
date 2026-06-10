@@ -66,6 +66,28 @@ final class SessionContextReaderTests: XCTestCase {
         XCTAssertEqual(context.lastAssistantMessage?.detail, "Final result.")
     }
 
+    func testLastAssistantMessageDoesNotUseAnswerBeforeLastQuestion() throws {
+        let jsonl = try makeJSONL([
+            #"{"timestamp":"2026-06-10T00:00:01Z","type":"event_msg","payload":{"type":"user_message","message":"first question"}}"#,
+            #"{"timestamp":"2026-06-10T00:00:02Z","type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"first answer"}]}}"#,
+            #"{"timestamp":"2026-06-10T00:00:03Z","type":"event_msg","payload":{"type":"user_message","message":"second question"}}"#
+        ])
+        let session = CatdexSession(
+            id: "test",
+            state: .responding,
+            task: "Test task",
+            workspace: "/tmp/project",
+            updatedAt: Date(),
+            lastMessage: "answering",
+            codexSessionPath: jsonl.path
+        )
+
+        let context = SessionContextReader(maxEvents: 10).readContext(for: session)
+
+        XCTAssertEqual(context.lastUserMessage?.detail, "second question")
+        XCTAssertNil(context.lastAssistantMessage)
+    }
+
     func testReadContextParsesFractionalTimestamps() throws {
         let jsonl = try makeJSONL([
             #"{"timestamp":"2026-06-10T00:00:01.123Z","type":"event_msg","payload":{"type":"user_message","message":"fractional user"}}"#,

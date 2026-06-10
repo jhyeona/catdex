@@ -443,7 +443,7 @@ final class SessionContextViewController: NSViewController {
 
         sections.append(formatSection("LAST ASSISTANT ANSWER", [
             ("Time", formattedTime(context.lastAssistantMessage?.timestamp)),
-            ("Text", finalAnswerResult(context.lastAssistantMessage?.detail) ?? "No assistant answer found.")
+            ("Text", finalAnswerResult(context.lastAssistantMessage?.detail) ?? "No assistant final answer after the last question yet.")
         ]))
 
         var paths: [(String, String)] = [

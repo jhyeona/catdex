@@ -79,9 +79,6 @@ public struct SessionContextReader {
         }
 
         var events: [CatdexContextEvent] = []
-        var lastUserMessage: CatdexContextEvent?
-        var lastAssistantMessage: CatdexContextEvent?
-        var lastAssistantUpdate: CatdexContextEvent?
         for line in content.split(separator: "\n") {
             guard let event = parseLine(String(line)) else { continue }
             if events.last?.kind == event.kind,
@@ -90,24 +87,24 @@ public struct SessionContextReader {
                 continue
             }
             events.append(event)
-            switch event.kind {
-            case .user:
-                lastUserMessage = event
-            case .assistant:
-                if event.title == "Assistant final" {
-                    lastAssistantMessage = event
-                } else {
-                    lastAssistantUpdate = event
-                }
-            case .tool, .review, .status:
-                break
-            }
+        }
+
+        let lastUserIndex = events.lastIndex { $0.kind == .user }
+        let lastUserMessage = lastUserIndex.map { events[$0] }
+        let answerSearchRange: ArraySlice<CatdexContextEvent>
+        if let lastUserIndex {
+            answerSearchRange = events[events.index(after: lastUserIndex)...]
+        } else {
+            answerSearchRange = events[...]
+        }
+        let lastAssistantMessage = answerSearchRange.last {
+            $0.kind == .assistant && $0.title == "Assistant final"
         }
 
         return CatdexSessionContext(
             codexSessionPath: path,
             lastUserMessage: lastUserMessage,
-            lastAssistantMessage: lastAssistantMessage ?? lastAssistantUpdate,
+            lastAssistantMessage: lastAssistantMessage,
             recentEvents: Array(events.suffix(maxEvents)),
             unavailableReason: nil
         )
