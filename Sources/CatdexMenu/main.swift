@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var timer: Timer?
     private var sessions: [CatdexSession] = []
     private var settingsWindowController: IconSettingsWindowController?
+    private var contextPopoverController: SessionContextPopoverController?
 
     override init() {
         let store = StatusStore()
@@ -21,8 +22,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.store = store
         self.iconStore = iconStore
         self.iconProvider = iconProvider
-        floatingPanel = FloatingPanelController(iconProvider: iconProvider)
+        floatingPanel = FloatingPanelController(iconProvider: iconProvider, settingsStore: iconStore)
         super.init()
+        floatingPanel.onSessionClick = { [weak self] session, sourceView in
+            self?.showSessionContext(for: session, relativeTo: sourceView)
+        }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -228,15 +232,319 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func quit() {
         NSApp.terminate(nil)
     }
+
+    private func showSessionContext(for session: CatdexSession, relativeTo sourceView: NSView) {
+        let controller = contextPopoverController ?? SessionContextPopoverController(store: store)
+        contextPopoverController = controller
+        controller.show(session: session, relativeTo: sourceView)
+    }
+}
+
+@MainActor
+final class SessionContextPopoverController {
+    private let store: StatusStore
+    private let reader = SessionContextReader(maxEvents: 8)
+    private let popover = NSPopover()
+
+    init(store: StatusStore) {
+        self.store = store
+        popover.behavior = .transient
+        popover.animates = false
+    }
+
+    func show(session: CatdexSession, relativeTo sourceView: NSView) {
+        let context = reader.readContext(for: session)
+        popover.contentViewController = SessionContextViewController(
+            session: session,
+            context: context,
+            sessionJSONURL: store.sessionURL(for: session.id),
+            onClose: { [weak self] in
+                self?.popover.close()
+            }
+        )
+        if popover.isShown {
+            popover.close()
+        }
+        popover.show(relativeTo: sourceView.bounds, of: sourceView, preferredEdge: .maxX)
+    }
+}
+
+@MainActor
+final class SessionContextViewController: NSViewController {
+    private let session: CatdexSession
+    private let context: CatdexSessionContext
+    private let sessionJSONURL: URL
+    private let onClose: () -> Void
+
+    init(session: CatdexSession, context: CatdexSessionContext, sessionJSONURL: URL, onClose: @escaping () -> Void) {
+        self.session = session
+        self.context = context
+        self.sessionJSONURL = sessionJSONURL
+        self.onClose = onClose
+        super.init(nibName: nil, bundle: nil)
+        preferredContentSize = NSSize(width: 430, height: 500)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func loadView() {
+        view = NSView()
+        view.translatesAutoresizingMaskIntoConstraints = false
+
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 10
+        stack.edgeInsets = NSEdgeInsets(top: 14, left: 14, bottom: 14, right: 14)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(stack)
+
+        stack.addArrangedSubview(makeHeaderRow())
+        stack.addArrangedSubview(makeSubtitleLabel())
+        stack.addArrangedSubview(makeContextScrollView())
+        stack.addArrangedSubview(makeButtonRow())
+
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            stack.topAnchor.constraint(equalTo: view.topAnchor),
+            stack.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            view.widthAnchor.constraint(equalToConstant: 430),
+            view.heightAnchor.constraint(equalToConstant: 500)
+        ])
+    }
+
+    private func makeHeaderRow() -> NSStackView {
+        let row = NSStackView()
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 8
+        row.translatesAutoresizingMaskIntoConstraints = false
+        row.widthAnchor.constraint(equalToConstant: 402).isActive = true
+
+        let title = makeTitleLabel()
+        row.addArrangedSubview(title)
+        row.addArrangedSubview(makeSpacer())
+        row.addArrangedSubview(makeCloseButton())
+        return row
+    }
+
+    private func makeTitleLabel() -> NSTextField {
+        let label = NSTextField(labelWithString: session.task)
+        label.font = NSFont.systemFont(ofSize: 16, weight: .semibold)
+        label.lineBreakMode = .byTruncatingTail
+        label.maximumNumberOfLines = 1
+        label.translatesAutoresizingMaskIntoConstraints = false
+        return label
+    }
+
+    private func makeSpacer() -> NSView {
+        let spacer = NSView()
+        spacer.translatesAutoresizingMaskIntoConstraints = false
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        return spacer
+    }
+
+    private func makeCloseButton() -> NSButton {
+        let button = NSButton(title: "", target: self, action: #selector(closePopover))
+        button.bezelStyle = .inline
+        button.isBordered = false
+        button.toolTip = "Close"
+        button.setContentHuggingPriority(.required, for: .horizontal)
+        if let image = NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: "Close") {
+            button.image = image
+            button.imagePosition = .imageOnly
+            button.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
+        } else {
+            button.title = "x"
+            button.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        }
+        return button
+    }
+
+    private func makeSubtitleLabel() -> NSTextField {
+        let branch = session.branch.map { " @\($0)" } ?? ""
+        let label = NSTextField(labelWithString: "\(session.state.rawValue.uppercased()) · \(session.projectName)\(branch)")
+        label.font = NSFont.systemFont(ofSize: 11, weight: .medium)
+        label.textColor = .secondaryLabelColor
+        label.lineBreakMode = .byTruncatingTail
+        label.maximumNumberOfLines = 1
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.widthAnchor.constraint(equalToConstant: 402).isActive = true
+        return label
+    }
+
+    private func makeContextScrollView() -> NSScrollView {
+        let textView = NSTextView()
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.drawsBackground = false
+        textView.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        textView.textColor = .labelColor
+        textView.textContainerInset = NSSize(width: 8, height: 8)
+        textView.textContainer?.widthTracksTextView = true
+        textView.string = contextText()
+
+        let scrollView = NSScrollView()
+        scrollView.documentView = textView
+        scrollView.hasVerticalScroller = true
+        scrollView.borderType = .lineBorder
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            scrollView.widthAnchor.constraint(equalToConstant: 402),
+            scrollView.heightAnchor.constraint(equalToConstant: 370)
+        ])
+        return scrollView
+    }
+
+    private func makeButtonRow() -> NSStackView {
+        let row = NSStackView()
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 8
+        row.translatesAutoresizingMaskIntoConstraints = false
+
+        row.addArrangedSubview(button("Workspace", action: #selector(openWorkspace), isEnabled: true))
+        row.addArrangedSubview(button("Log", action: #selector(openLog), isEnabled: session.logPath != nil))
+        row.addArrangedSubview(button("Copy Context", action: #selector(copyContext), isEnabled: true))
+        row.addArrangedSubview(button("Reveal JSON", action: #selector(revealSessionJSON), isEnabled: true))
+        return row
+    }
+
+    private func button(_ title: String, action: Selector, isEnabled: Bool) -> NSButton {
+        let button = NSButton(title: title, target: self, action: action)
+        button.bezelStyle = .rounded
+        button.controlSize = .small
+        button.isEnabled = isEnabled
+        return button
+    }
+
+    private func contextText() -> String {
+        var sections: [String] = []
+        sections.append(formatSection("CURRENT", [
+            ("State", session.state.rawValue.uppercased()),
+            ("Last message", session.lastMessage),
+            ("Updated", Self.eventTimeFormatter.string(from: session.updatedAt))
+        ]))
+
+        if let reviewOptions = session.reviewOptions, !reviewOptions.isEmpty {
+            let options = reviewOptions.enumerated()
+                .map { index, option in "\(index + 1). \(option)" }
+                .joined(separator: "\n")
+            sections.append(formatSection("REVIEW OPTIONS", [("Options", options)]))
+        }
+
+        sections.append(formatSection("LAST USER QUESTION", [
+            ("Time", formattedTime(context.lastUserMessage?.timestamp)),
+            ("Text", context.lastUserMessage?.detail ?? "No user question found.")
+        ]))
+
+        sections.append(formatSection("LAST ASSISTANT ANSWER", [
+            ("Time", formattedTime(context.lastAssistantMessage?.timestamp)),
+            ("Text", finalAnswerResult(context.lastAssistantMessage?.detail) ?? "No assistant answer found.")
+        ]))
+
+        var paths: [(String, String)] = [
+            ("Workspace", session.workspace)
+        ]
+
+        if let logPath = session.logPath {
+            paths.append(("Log", logPath))
+        }
+
+        if let codexSessionPath = context.codexSessionPath {
+            paths.append(("Codex session", codexSessionPath))
+        }
+        sections.append(formatSection("PATHS", paths))
+
+        return sections.joined(separator: "\n\n")
+    }
+
+    private func formatEvent(_ event: CatdexContextEvent) -> String {
+        let time = formattedTime(event.timestamp)
+        let detail = event.detail.replacingOccurrences(of: "\n", with: "\n  ")
+        return "[\(time)] \(event.title)\n  \(detail)"
+    }
+
+    private func finalAnswerResult(_ answer: String?) -> String? {
+        guard let answer = answer?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !answer.isEmpty
+        else {
+            return nil
+        }
+
+        let lines = answer.components(separatedBy: .newlines)
+        let separatorIndex = lines.lastIndex { line in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.count >= 3 else { return false }
+            return trimmed.allSatisfy { $0 == "-" || $0 == "_" || $0 == "*" || $0 == "─" || $0 == "━" }
+        }
+
+        guard let separatorIndex else {
+            return answer
+        }
+
+        let result = lines[lines.index(after: separatorIndex)...]
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return result.isEmpty ? answer : result
+    }
+
+    private func formatSection(_ title: String, _ rows: [(String, String)]) -> String {
+        let maxKeyLength = max(1, rows.map { $0.0.count }.max() ?? 1)
+        let body = rows.map { key, value in
+            let paddedKey = key.padding(toLength: maxKeyLength, withPad: " ", startingAt: 0)
+            let formattedValue = value.replacingOccurrences(of: "\n", with: "\n\(String(repeating: " ", count: maxKeyLength + 3))")
+            return "\(paddedKey) : \(formattedValue)"
+        }.joined(separator: "\n")
+        return "[\(title)]\n\(body)"
+    }
+
+    private func formattedTime(_ date: Date?) -> String {
+        date.map { Self.eventTimeFormatter.string(from: $0) } ?? "-"
+    }
+
+    @objc private func openWorkspace() {
+        NSWorkspace.shared.open(URL(fileURLWithPath: session.workspace, isDirectory: true))
+    }
+
+    @objc private func openLog() {
+        guard let path = session.logPath else { return }
+        NSWorkspace.shared.open(URL(fileURLWithPath: path))
+    }
+
+    @objc private func revealSessionJSON() {
+        NSWorkspace.shared.activateFileViewerSelecting([sessionJSONURL])
+    }
+
+    @objc private func closePopover() {
+        onClose()
+    }
+
+    @objc private func copyContext() {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(contextText(), forType: .string)
+    }
+
+    private static let eventTimeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+        return formatter
+    }()
 }
 
 private struct IconSettings: Codable {
     var iconPaths: [String: String] = [:]
     var iconEmojis: [String: String] = [:]
+    var floatingPanelOrigin: PanelOrigin?
 
     enum CodingKeys: String, CodingKey {
         case iconPaths
         case iconEmojis
+        case floatingPanelOrigin
     }
 
     init() {}
@@ -245,13 +553,20 @@ private struct IconSettings: Codable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         iconPaths = try container.decodeIfPresent([String: String].self, forKey: .iconPaths) ?? [:]
         iconEmojis = try container.decodeIfPresent([String: String].self, forKey: .iconEmojis) ?? [:]
+        floatingPanelOrigin = try container.decodeIfPresent(PanelOrigin.self, forKey: .floatingPanelOrigin)
     }
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(iconPaths, forKey: .iconPaths)
         try container.encode(iconEmojis, forKey: .iconEmojis)
+        try container.encodeIfPresent(floatingPanelOrigin, forKey: .floatingPanelOrigin)
     }
+}
+
+private struct PanelOrigin: Codable {
+    var x: CGFloat
+    var y: CGFloat
 }
 
 final class IconSettingsStore {
@@ -276,6 +591,16 @@ final class IconSettingsStore {
 
     func emoji(for state: CatdexState) -> String? {
         settings.iconEmojis[state.rawValue]
+    }
+
+    func floatingPanelOrigin() -> NSPoint? {
+        guard let origin = settings.floatingPanelOrigin else { return nil }
+        return NSPoint(x: origin.x, y: origin.y)
+    }
+
+    func setFloatingPanelOrigin(_ origin: NSPoint) throws {
+        settings.floatingPanelOrigin = PanelOrigin(x: origin.x, y: origin.y)
+        try save()
     }
 
     func setPath(_ path: String, for state: CatdexState) throws {
@@ -637,15 +962,24 @@ final class IconPreviewView: NSView {
 final class FloatingPanelController {
     private let panel: NSPanel
     private let gridView: SessionGridView
+    private let settingsStore: IconSettingsStore
     private var isShown = true
     private var didPlacePanel = false
+    private var isProgrammaticMove = false
+
+    var onSessionClick: ((CatdexSession, NSView) -> Void)? {
+        didSet {
+            gridView.onSessionClick = onSessionClick
+        }
+    }
 
     var menuTitle: String {
         isShown ? "Hide Floating Panel" : "Show Floating Panel"
     }
 
-    init(iconProvider: StateIconProvider) {
+    init(iconProvider: StateIconProvider, settingsStore: IconSettingsStore) {
         gridView = SessionGridView(iconProvider: iconProvider)
+        self.settingsStore = settingsStore
         panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 48, height: 48),
             styleMask: [.borderless, .nonactivatingPanel],
@@ -657,25 +991,29 @@ final class FloatingPanelController {
         panel.isOpaque = false
         panel.hasShadow = true
         panel.hidesOnDeactivate = false
-        panel.isMovableByWindowBackground = true
+        panel.isMovableByWindowBackground = false
         panel.level = .floating
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        gridView.onWindowDrag = { [weak self] origin, finished in
+            self?.moveToUserOrigin(origin, persist: finished)
+        }
     }
 
     func update(with sessions: [CatdexSession]) {
         gridView.sessions = sessions.filter { $0.state != .done }
         let size = gridView.preferredSize
-        let currentTopRight = NSPoint(x: panel.frame.maxX, y: panel.frame.maxY)
-
-        if didPlacePanel {
-            panel.setFrame(
-                NSRect(x: currentTopRight.x - size.width, y: currentTopRight.y - size.height, width: size.width, height: size.height),
-                display: true
-            )
+        let savedOrigin = settingsStore.floatingPanelOrigin()
+        let origin: NSPoint
+        if let savedOrigin, screen(containing: savedOrigin) != nil {
+            origin = savedOrigin
+        } else if didPlacePanel {
+            origin = panel.frame.origin
         } else {
-            panel.setFrame(defaultFrame(size: size), display: true)
-            didPlacePanel = true
+            origin = savedOrigin ?? defaultFrame(size: size).origin
         }
+
+        setFramePreservingUserPlacement(NSRect(origin: origin, size: size))
+        didPlacePanel = true
 
         if isShown {
             panel.orderFrontRegardless()
@@ -688,6 +1026,38 @@ final class FloatingPanelController {
             panel.orderFrontRegardless()
         } else {
             panel.orderOut(nil)
+        }
+    }
+
+    private func moveToUserOrigin(_ origin: NSPoint, persist: Bool) {
+        var frame = panel.frame
+        frame.origin = origin
+        setFramePreservingUserPlacement(frame)
+        if persist {
+            try? settingsStore.setFloatingPanelOrigin(panel.frame.origin)
+        }
+    }
+
+    private func setFramePreservingUserPlacement(_ frame: NSRect) {
+        isProgrammaticMove = true
+        panel.setFrame(constrain(frame), display: true)
+        isProgrammaticMove = false
+    }
+
+    private func constrain(_ frame: NSRect) -> NSRect {
+        guard let screen = screen(containing: frame.origin) ?? NSScreen.screens.first else {
+            return frame
+        }
+        let visible = screen.visibleFrame
+        var adjusted = frame
+        adjusted.origin.x = min(max(adjusted.origin.x, visible.minX), visible.maxX - min(frame.width, visible.width))
+        adjusted.origin.y = min(max(adjusted.origin.y, visible.minY), visible.maxY - min(frame.height, visible.height))
+        return adjusted
+    }
+
+    private func screen(containing point: NSPoint) -> NSScreen? {
+        NSScreen.screens.first { screen in
+            screen.visibleFrame.contains(point)
         }
     }
 
@@ -714,6 +1084,28 @@ final class SessionGridView: NSVisualEffectView {
     }
 
     private let iconProvider: StateIconProvider
+    private let dragController = WindowDragController()
+
+    private struct CellModel {
+        var title: String
+        var image: NSImage?
+        var subtitle: String
+        var tooltip: String
+        var session: CatdexSession?
+    }
+
+    var onSessionClick: ((CatdexSession, NSView) -> Void)? {
+        didSet {
+            subviews.compactMap { $0 as? SessionIconCell }.forEach { $0.onClick = onSessionClick }
+        }
+    }
+
+    var onWindowDrag: ((NSPoint, Bool) -> Void)? {
+        didSet {
+            dragController.onOriginChange = onWindowDrag
+            subviews.compactMap { $0 as? SessionIconCell }.forEach { $0.dragController = dragController }
+        }
+    }
 
     var sessions: [CatdexSession] = [] {
         didSet {
@@ -747,46 +1139,95 @@ final class SessionGridView: NSVisualEffectView {
     }
 
     override var mouseDownCanMoveWindow: Bool {
-        true
+        false
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        dragController.mouseDown(event, in: self)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        dragController.mouseDragged(event, in: self)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        dragController.mouseUp(event, in: self)
     }
 
     private func rebuildCells() {
-        subviews.compactMap { $0 as? SessionIconCell }.forEach { $0.removeFromSuperview() }
+        let models = cellModels()
+        var cells = subviews.compactMap { $0 as? SessionIconCell }
 
-        let visibleSessions = Array(sessions.prefix(Layout.maxCells))
-        if visibleSessions.isEmpty {
-            addCell(title: "🐱", image: nil, subtitle: "자는 중", tooltip: "진행 중인 Codex 작업 없음")
-            layoutCells()
-            return
+        while cells.count > models.count {
+            let cell = cells.removeLast()
+            cell.removeFromSuperview()
         }
 
-        for session in visibleSessions {
-            addCell(
-                title: iconProvider.displayEmoji(for: session.state, fallback: session.displayEmoji),
-                image: iconProvider.image(for: session.state),
-                subtitle: session.task,
-                tooltip: tooltip(for: session)
-            )
+        while cells.count < models.count {
+            let cell = makeCell()
+            addSubview(cell)
+            cells.append(cell)
         }
 
-        if sessions.count > Layout.maxCells,
-           let lastCell = subviews.last as? SessionIconCell {
-            lastCell.title = "+\(sessions.count - Layout.maxCells + 1)"
-            lastCell.iconImage = nil
-            lastCell.subtitle = "추가"
-            lastCell.toolTip = "추가 세션 \(sessions.count - Layout.maxCells + 1)개"
+        for (cell, model) in zip(cells, models) {
+            configure(cell, with: model)
         }
 
         layoutCells()
     }
 
-    private func addCell(title: String, image: NSImage?, subtitle: String, tooltip: String) {
+    private func cellModels() -> [CellModel] {
+        let visibleSessions = Array(sessions.prefix(Layout.maxCells))
+        if visibleSessions.isEmpty {
+            return [
+                CellModel(
+                    title: "🐱",
+                    image: nil,
+                    subtitle: "자는 중",
+                    tooltip: "진행 중인 Codex 작업 없음",
+                    session: nil
+                )
+            ]
+        }
+
+        var models = visibleSessions.map { session in
+            CellModel(
+                title: iconProvider.displayEmoji(for: session.state, fallback: session.displayEmoji),
+                image: iconProvider.image(for: session.state),
+                subtitle: session.task,
+                tooltip: tooltip(for: session),
+                session: session
+            )
+        }
+
+        if sessions.count > Layout.maxCells {
+            models[models.count - 1] = CellModel(
+                title: "+\(sessions.count - Layout.maxCells + 1)",
+                image: nil,
+                subtitle: "추가",
+                tooltip: "추가 세션 \(sessions.count - Layout.maxCells + 1)개",
+                session: nil
+            )
+        }
+
+        return models
+    }
+
+    private func makeCell() -> SessionIconCell {
         let cell = SessionIconCell(frame: .zero)
-        cell.title = title
-        cell.iconImage = image
-        cell.subtitle = subtitle
-        cell.toolTip = tooltip
-        addSubview(cell)
+        cell.dragController = dragController
+        cell.onClick = onSessionClick
+        return cell
+    }
+
+    private func configure(_ cell: SessionIconCell, with model: CellModel) {
+        cell.dragController = dragController
+        cell.onClick = onSessionClick
+        cell.session = model.session
+        cell.title = model.title
+        cell.iconImage = model.image
+        cell.subtitle = model.subtitle
+        cell.toolTip = model.tooltip
     }
 
     override func layout() {
@@ -816,10 +1257,65 @@ final class SessionGridView: NSVisualEffectView {
 }
 
 @MainActor
+final class WindowDragController {
+    var onOriginChange: ((NSPoint, Bool) -> Void)?
+
+    private var startScreenPoint: NSPoint?
+    private var startWindowOrigin: NSPoint?
+    private var didDrag = false
+    private let clickTolerance: CGFloat = 4
+
+    func mouseDown(_ event: NSEvent, in view: NSView) {
+        guard let window = view.window else { return }
+        startScreenPoint = window.convertPoint(toScreen: event.locationInWindow)
+        startWindowOrigin = window.frame.origin
+        didDrag = false
+    }
+
+    func mouseDragged(_ event: NSEvent, in view: NSView) {
+        update(event, in: view, finished: false)
+    }
+
+    @discardableResult
+    func mouseUp(_ event: NSEvent, in view: NSView) -> Bool {
+        update(event, in: view, finished: true)
+        let wasDrag = didDrag
+        startScreenPoint = nil
+        startWindowOrigin = nil
+        didDrag = false
+        return wasDrag
+    }
+
+    private func update(_ event: NSEvent, in view: NSView, finished: Bool) {
+        guard let window = view.window,
+              let startScreenPoint,
+              let startWindowOrigin
+        else {
+            return
+        }
+
+        let current = window.convertPoint(toScreen: event.locationInWindow)
+        let origin = NSPoint(
+            x: startWindowOrigin.x + current.x - startScreenPoint.x,
+            y: startWindowOrigin.y + current.y - startScreenPoint.y
+        )
+        let dx = current.x - startScreenPoint.x
+        let dy = current.y - startScreenPoint.y
+        didDrag = didDrag || hypot(dx, dy) > clickTolerance
+        if didDrag {
+            onOriginChange?(origin, finished)
+        }
+    }
+}
+
+@MainActor
 final class SessionIconCell: NSView {
     private let label = NSTextField(labelWithString: "")
     private let imageView = NSImageView()
     private let subtitleLabel = NSTextField(labelWithString: "")
+    weak var dragController: WindowDragController?
+    var session: CatdexSession?
+    var onClick: ((CatdexSession, NSView) -> Void)?
 
     var title: String {
         get { label.stringValue }
@@ -885,7 +1381,21 @@ final class SessionIconCell: NSView {
     }
 
     override var mouseDownCanMoveWindow: Bool {
-        true
+        false
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        dragController?.mouseDown(event, in: self)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        dragController?.mouseDragged(event, in: self)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        let wasDrag = dragController?.mouseUp(event, in: self) ?? false
+        guard !wasDrag, let session else { return }
+        onClick?(session, self)
     }
 }
 
