@@ -11,8 +11,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let iconProvider: StateIconProvider
     private let floatingPanel: FloatingPanelController
     private var timer: Timer?
+    private var usageTimer: Timer?
+    private var usageRefreshTask: Task<Void, Never>?
+    private var usageRefreshGeneration = 0
     private var sessions: [CatdexSession] = []
+    private var previousSessionStates: [String: CatdexState] = [:]
+    private var tokenUsageSummary: TokenUsageSummary?
+    private var tokenUsageSummaryUpdatedAt: Date?
+    private var tokenUsageIsRefreshing = false
+    private weak var activeUsageView: UsageMenuView?
     private var settingsWindowController: IconSettingsWindowController?
+    private var usageRangeWindowController: UsageRangeWindowController?
     private var contextPopoverController: SessionContextPopoverController?
 
     override init() {
@@ -32,6 +41,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         statusItem.button?.font = NSFont.monospacedSystemFont(ofSize: 14, weight: .medium)
+        refreshTokenUsage()
+        updateUsageTimer()
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             Task { @MainActor in
@@ -41,16 +52,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        usageRefreshTask?.cancel()
         timer?.invalidate()
+        usageTimer?.invalidate()
     }
 
     @objc private func refresh() {
         _ = try? store.pruneFinished(olderThan: 60 * 60 * 24)
         iconProvider.reload()
-        sessions = store.loadSessions()
+        let loadedSessions = applySessionTaskOverrides(to: store.loadSessions())
+        refreshTokenUsageIfSessionFinished(loadedSessions)
+        sessions = loadedSessions
         statusItem.button?.title = statusTitle(for: sessions)
         statusItem.menu = makeMenu()
         floatingPanel.update(with: sessions)
+    }
+
+    private func applySessionTaskOverrides(to sessions: [CatdexSession]) -> [CatdexSession] {
+        sessions.map { session in
+            guard let task = iconStore.sessionTaskOverride(for: session.id) else {
+                return session
+            }
+            var renamedSession = session
+            renamedSession.task = task
+            return renamedSession
+        }
     }
 
     private func statusTitle(for sessions: [CatdexSession]) -> String {
@@ -110,6 +136,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         menu.addItem(NSMenuItem.separator())
+        let usageItem = NSMenuItem(title: usageMenuTitle(), action: nil, keyEquivalent: "")
+        usageItem.submenu = makeUsageMenu()
+        menu.addItem(usageItem)
+        menu.addItem(NSMenuItem.separator())
         addAction(floatingPanel.menuTitle, selector: #selector(toggleFloatingPanel), to: menu)
         addAction("Settings...", selector: #selector(openSettings), to: menu)
         addAction("Open Status Folder", selector: #selector(openStatusFolder), to: menu)
@@ -118,6 +148,69 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem.separator())
         addAction("Quit", selector: #selector(quit), to: menu)
         return menu
+    }
+
+    private func makeUsageMenu() -> NSMenu {
+        let menu = NSMenu(title: "Token Usage")
+        let view = UsageMenuView(
+            snapshot: makeUsageSnapshot(),
+            hourlyRefreshEnabled: iconStore.hourlyTokenUsageRefreshEnabled(),
+            onRefresh: { [weak self] in
+                self?.performUsageRefresh(clearExistingSummary: false, preservingOpenMenu: true)
+            },
+            onToggleHourlyRefresh: { [weak self] in
+                self?.toggleHourlyUsageRefresh(preservingOpenMenu: true)
+            },
+            onSetRange: { [weak self, weak menu] in
+                menu?.cancelTracking()
+                self?.openUsageRange()
+            },
+            onResetRange: { [weak self] in
+                self?.resetUsageRange(preservingOpenMenu: true)
+            }
+        )
+        activeUsageView = view
+
+        let item = NSMenuItem()
+        item.view = view
+        menu.addItem(item)
+        return menu
+    }
+
+    private func updateUsageDisplay(preservingOpenMenu: Bool) {
+        if preservingOpenMenu, let activeUsageView {
+            activeUsageView.update(
+                snapshot: makeUsageSnapshot(),
+                hourlyRefreshEnabled: iconStore.hourlyTokenUsageRefreshEnabled()
+            )
+        } else {
+            statusItem.menu = makeMenu()
+        }
+    }
+
+    private func makeUsageSnapshot() -> UsageMenuSnapshot {
+        let range = iconStore.tokenUsageRange()
+        let summary = tokenUsageSummary ?? emptyTokenUsageSummary(for: range)
+        let updated: String
+        if tokenUsageIsRefreshing {
+            updated = "Refreshing..."
+        } else if let tokenUsageSummaryUpdatedAt {
+            updated = formatTimestamp(tokenUsageSummaryUpdatedAt)
+        } else {
+            updated = "Not loaded"
+        }
+
+        return UsageMenuSnapshot(
+            range: "\(formatDay(range.startDay)) - \(formatDay(range.endDay))",
+            updated: updated,
+            sessionsAndEvents: "\(summary.sessionCount) · \(summary.eventCount)",
+            total: formatTokens(summary.totals.totalTokens),
+            input: formatTokens(summary.totals.inputTokens),
+            cached: formatTokens(summary.totals.cachedInputTokens),
+            output: formatTokens(summary.totals.outputTokens),
+            reasoning: formatTokens(summary.totals.reasoningOutputTokens),
+            contextWindow: summary.latestContextWindow.map(formatTokens)
+        )
     }
 
     private func makeSessionMenu(for session: CatdexSession) -> NSMenu {
@@ -155,6 +248,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item.target = self
         item.representedObject = representedObject
         menu.addItem(item)
+    }
+
+    private func addCheckAction(
+        _ title: String,
+        selector: Selector,
+        isOn: Bool,
+        to menu: NSMenu
+    ) {
+        let item = NSMenuItem(title: title, action: selector, keyEquivalent: "")
+        item.target = self
+        item.state = isOn ? .on : .off
+        menu.addItem(item)
+    }
+
+    private func addDisabled(_ title: String, to menu: NSMenu) {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        menu.addItem(item)
+    }
+
+    private func usageMenuTitle() -> String {
+        if tokenUsageIsRefreshing {
+            return "Token Usage: Refreshing..."
+        }
+        let total = tokenUsageSummary?.totals.totalTokens ?? 0
+        return "Token Usage: \(formatCompactTokens(total))"
     }
 
     private func menuTitle(for session: CatdexSession) -> String {
@@ -229,25 +348,365 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    @objc private func openUsageRange() {
+        let controller = usageRangeWindowController ?? UsageRangeWindowController(
+            settingsStore: iconStore,
+            onChange: { [weak self] in
+                self?.performUsageRefresh(clearExistingSummary: true)
+            }
+        )
+        usageRangeWindowController = controller
+        controller.reload()
+        controller.showWindow(nil)
+        controller.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @objc private func resetUsageRange() {
+        try? iconStore.resetTokenUsageRange()
+        performUsageRefresh(clearExistingSummary: true)
+    }
+
+    private func resetUsageRange(preservingOpenMenu: Bool) {
+        try? iconStore.resetTokenUsageRange()
+        performUsageRefresh(clearExistingSummary: true, preservingOpenMenu: preservingOpenMenu)
+    }
+
+    @objc private func toggleHourlyUsageRefresh() {
+        let nextValue = !iconStore.hourlyTokenUsageRefreshEnabled()
+        try? iconStore.setHourlyTokenUsageRefreshEnabled(nextValue)
+        updateUsageTimer()
+        refresh()
+    }
+
+    private func toggleHourlyUsageRefresh(preservingOpenMenu: Bool) {
+        let nextValue = !iconStore.hourlyTokenUsageRefreshEnabled()
+        try? iconStore.setHourlyTokenUsageRefreshEnabled(nextValue)
+        updateUsageTimer()
+        updateUsageDisplay(preservingOpenMenu: preservingOpenMenu)
+    }
+
+    @objc private func refreshUsage() {
+        performUsageRefresh(clearExistingSummary: false)
+    }
+
+    private func performUsageRefresh(clearExistingSummary: Bool) {
+        refreshTokenUsage(clearExistingSummary: clearExistingSummary, preservingOpenMenu: false)
+        refresh()
+    }
+
+    private func performUsageRefresh(clearExistingSummary: Bool, preservingOpenMenu: Bool) {
+        refreshTokenUsage(clearExistingSummary: clearExistingSummary, preservingOpenMenu: preservingOpenMenu)
+    }
+
     @objc private func quit() {
         NSApp.terminate(nil)
     }
 
     private func showSessionContext(for session: CatdexSession, relativeTo sourceView: NSView) {
-        let controller = contextPopoverController ?? SessionContextPopoverController(store: store)
+        let controller = contextPopoverController ?? SessionContextPopoverController(
+            store: store,
+            onTaskChange: { [weak self] sessionID, task in
+                guard let self else { return false }
+                do {
+                    try self.iconStore.setSessionTaskOverride(task, for: sessionID)
+                    try? self.store.updateSession(id: sessionID) { session in
+                        session.task = task
+                    }
+                    self.refresh()
+                    return true
+                } catch {
+                    NSSound.beep()
+                    return false
+                }
+            }
+        )
         contextPopoverController = controller
         controller.show(session: session, relativeTo: sourceView)
+    }
+
+    private func refreshTokenUsageIfSessionFinished(_ loadedSessions: [CatdexSession]) {
+        defer {
+            previousSessionStates = Dictionary(
+                uniqueKeysWithValues: loadedSessions.map { ($0.id, $0.state) }
+            )
+        }
+
+        guard !previousSessionStates.isEmpty else { return }
+        let hasFinishedTransition = loadedSessions.contains { session in
+            previousSessionStates[session.id]?.isActive == true && session.state.isFinished
+        }
+        if hasFinishedTransition {
+            refreshTokenUsage(clearExistingSummary: false, preservingOpenMenu: false)
+        }
+    }
+
+    private func formatDay(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
+    }
+
+    private func formatTimestamp(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return formatter.string(from: date)
+    }
+
+    private func formatTokens(_ value: Int) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        return formatter.string(from: NSNumber(value: value)) ?? "\(value)"
+    }
+
+    private func formatCompactTokens(_ value: Int) -> String {
+        if value >= 1_000_000 {
+            return String(format: "%.1fM", Double(value) / 1_000_000)
+        }
+        if value >= 1_000 {
+            return String(format: "%.1fK", Double(value) / 1_000)
+        }
+        return "\(value)"
+    }
+
+    private func refreshTokenUsage(clearExistingSummary: Bool = false, preservingOpenMenu: Bool = false) {
+        let range = iconStore.tokenUsageRange()
+        let root = codexSessionsRoot()
+        let interval = range.interval
+        usageRefreshGeneration += 1
+        let generation = usageRefreshGeneration
+
+        usageRefreshTask?.cancel()
+        if clearExistingSummary {
+            tokenUsageSummary = nil
+            tokenUsageSummaryUpdatedAt = nil
+        }
+        tokenUsageIsRefreshing = true
+        updateUsageDisplay(preservingOpenMenu: preservingOpenMenu)
+
+        usageRefreshTask = Task.detached(priority: .utility) { [root, interval, generation, preservingOpenMenu] in
+            let summary = TokenUsageReader().summarizeCodexSessions(
+                root: root,
+                range: interval
+            )
+
+            guard !Task.isCancelled else {
+                return
+            }
+
+            await MainActor.run { [weak self] in
+                guard let self,
+                      self.usageRefreshGeneration == generation
+                else {
+                    return
+                }
+
+                self.tokenUsageSummary = summary
+                self.tokenUsageSummaryUpdatedAt = Date()
+                self.tokenUsageIsRefreshing = false
+                self.updateUsageDisplay(preservingOpenMenu: preservingOpenMenu)
+            }
+        }
+    }
+
+    private func updateUsageTimer() {
+        usageTimer?.invalidate()
+        usageTimer = nil
+
+        guard iconStore.hourlyTokenUsageRefreshEnabled() else { return }
+        usageTimer = Timer.scheduledTimer(withTimeInterval: 60 * 60, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshUsage()
+            }
+        }
+    }
+
+    private func emptyTokenUsageSummary(for range: UsageDateRange) -> TokenUsageSummary {
+        TokenUsageSummary(
+            range: range.interval,
+            totals: TokenUsageTotals(),
+            sessionCount: 0,
+            eventCount: 0,
+            latestContextWindow: nil
+        )
+    }
+
+    private func codexSessionsRoot() -> URL {
+        let codexHome = ProcessInfo.processInfo.environment["CODEX_HOME"]
+            .map { URL(fileURLWithPath: $0, isDirectory: true) }
+            ?? FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".codex", isDirectory: true)
+        return codexHome.appendingPathComponent("sessions", isDirectory: true)
+    }
+}
+
+@MainActor
+private struct UsageMenuSnapshot {
+    var range: String
+    var updated: String
+    var sessionsAndEvents: String
+    var total: String
+    var input: String
+    var cached: String
+    var output: String
+    var reasoning: String
+    var contextWindow: String?
+}
+
+@MainActor
+private final class UsageMenuView: NSView {
+    private let rangeValue = NSTextField(labelWithString: "")
+    private let updatedValue = NSTextField(labelWithString: "")
+    private let sessionsValue = NSTextField(labelWithString: "")
+    private let totalValue = NSTextField(labelWithString: "")
+    private let inputValue = NSTextField(labelWithString: "")
+    private let cachedValue = NSTextField(labelWithString: "")
+    private let outputValue = NSTextField(labelWithString: "")
+    private let reasoningValue = NSTextField(labelWithString: "")
+    private let contextValue = NSTextField(labelWithString: "")
+    private let hourlyButton: NSButton
+    private let onRefresh: @MainActor () -> Void
+    private let onToggleHourlyRefresh: @MainActor () -> Void
+    private let onSetRange: @MainActor () -> Void
+    private let onResetRange: @MainActor () -> Void
+
+    init(
+        snapshot: UsageMenuSnapshot,
+        hourlyRefreshEnabled: Bool,
+        onRefresh: @escaping @MainActor () -> Void,
+        onToggleHourlyRefresh: @escaping @MainActor () -> Void,
+        onSetRange: @escaping @MainActor () -> Void,
+        onResetRange: @escaping @MainActor () -> Void
+    ) {
+        self.onRefresh = onRefresh
+        self.onToggleHourlyRefresh = onToggleHourlyRefresh
+        self.onSetRange = onSetRange
+        self.onResetRange = onResetRange
+        hourlyButton = NSButton(checkboxWithTitle: "Hourly Refresh", target: nil, action: nil)
+        super.init(frame: NSRect(x: 0, y: 0, width: 270, height: 270))
+
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 6
+        stack.edgeInsets = NSEdgeInsets(top: 10, left: 14, bottom: 10, right: 14)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+
+        stack.addArrangedSubview(makeRow("Range", rangeValue))
+        stack.addArrangedSubview(makeRow("Updated", updatedValue))
+        stack.addArrangedSubview(makeRow("Sessions · Events", sessionsValue))
+        stack.addArrangedSubview(separator())
+        stack.addArrangedSubview(makeRow("Total", totalValue))
+        stack.addArrangedSubview(makeRow("Input", inputValue))
+        stack.addArrangedSubview(makeRow("Cached", cachedValue))
+        stack.addArrangedSubview(makeRow("Output", outputValue))
+        stack.addArrangedSubview(makeRow("Reasoning", reasoningValue))
+        stack.addArrangedSubview(makeRow("Context window", contextValue))
+        stack.addArrangedSubview(separator())
+        stack.addArrangedSubview(makeButton("Refresh Usage", action: #selector(refreshUsage)))
+
+        hourlyButton.target = self
+        hourlyButton.action = #selector(toggleHourlyRefresh)
+        hourlyButton.refusesFirstResponder = true
+        stack.addArrangedSubview(hourlyButton)
+
+        stack.addArrangedSubview(makeButton("Set Usage Range...", action: #selector(setUsageRange)))
+        stack.addArrangedSubview(makeButton("Reset Usage Range (30 Days)", action: #selector(resetUsageRange)))
+
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            stack.topAnchor.constraint(equalTo: topAnchor),
+            stack.bottomAnchor.constraint(equalTo: bottomAnchor),
+            widthAnchor.constraint(equalToConstant: 270)
+        ])
+
+        update(snapshot: snapshot, hourlyRefreshEnabled: hourlyRefreshEnabled)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func update(snapshot: UsageMenuSnapshot, hourlyRefreshEnabled: Bool) {
+        rangeValue.stringValue = snapshot.range
+        updatedValue.stringValue = snapshot.updated
+        sessionsValue.stringValue = snapshot.sessionsAndEvents
+        totalValue.stringValue = snapshot.total
+        inputValue.stringValue = snapshot.input
+        cachedValue.stringValue = snapshot.cached
+        outputValue.stringValue = snapshot.output
+        reasoningValue.stringValue = snapshot.reasoning
+        contextValue.stringValue = snapshot.contextWindow ?? "-"
+        hourlyButton.state = hourlyRefreshEnabled ? .on : .off
+        needsLayout = true
+        needsDisplay = true
+    }
+
+    private func makeRow(_ title: String, _ valueLabel: NSTextField) -> NSStackView {
+        let row = NSStackView()
+        row.orientation = .horizontal
+        row.alignment = .firstBaseline
+        row.spacing = 8
+
+        let titleLabel = NSTextField(labelWithString: title)
+        titleLabel.textColor = .secondaryLabelColor
+        titleLabel.font = NSFont.systemFont(ofSize: 12)
+        titleLabel.widthAnchor.constraint(equalToConstant: 104).isActive = true
+
+        valueLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        valueLabel.lineBreakMode = .byTruncatingMiddle
+
+        row.addArrangedSubview(titleLabel)
+        row.addArrangedSubview(valueLabel)
+        return row
+    }
+
+    private func makeButton(_ title: String, action: Selector) -> NSButton {
+        let button = NSButton(title: title, target: self, action: action)
+        button.bezelStyle = .inline
+        button.isBordered = false
+        button.alignment = .left
+        button.refusesFirstResponder = true
+        return button
+    }
+
+    private func separator() -> NSBox {
+        let box = NSBox()
+        box.boxType = .separator
+        box.translatesAutoresizingMaskIntoConstraints = false
+        box.widthAnchor.constraint(equalToConstant: 242).isActive = true
+        return box
+    }
+
+    @objc private func refreshUsage() {
+        onRefresh()
+    }
+
+    @objc private func toggleHourlyRefresh() {
+        onToggleHourlyRefresh()
+    }
+
+    @objc private func setUsageRange() {
+        onSetRange()
+    }
+
+    @objc private func resetUsageRange() {
+        onResetRange()
     }
 }
 
 @MainActor
 final class SessionContextPopoverController {
     private let store: StatusStore
+    private let onTaskChange: (String, String) -> Bool
     private let reader = SessionContextReader(maxEvents: 8)
     private let popover = NSPopover()
 
-    init(store: StatusStore) {
+    init(store: StatusStore, onTaskChange: @escaping (String, String) -> Bool) {
         self.store = store
+        self.onTaskChange = onTaskChange
         popover.behavior = .transient
         popover.animates = false
     }
@@ -258,6 +717,7 @@ final class SessionContextPopoverController {
             session: session,
             context: context,
             sessionJSONURL: store.sessionURL(for: session.id),
+            onTaskChange: onTaskChange,
             onClose: { [weak self] in
                 self?.popover.close()
             }
@@ -274,13 +734,25 @@ final class SessionContextViewController: NSViewController {
     private let session: CatdexSession
     private let context: CatdexSessionContext
     private let sessionJSONURL: URL
+    private let onTaskChange: (String, String) -> Bool
     private let onClose: () -> Void
+    private let titleField = NSTextField()
+    private let editTitleButton = NSButton()
+    private var displayedTask: String
 
-    init(session: CatdexSession, context: CatdexSessionContext, sessionJSONURL: URL, onClose: @escaping () -> Void) {
+    init(
+        session: CatdexSession,
+        context: CatdexSessionContext,
+        sessionJSONURL: URL,
+        onTaskChange: @escaping (String, String) -> Bool,
+        onClose: @escaping () -> Void
+    ) {
         self.session = session
         self.context = context
         self.sessionJSONURL = sessionJSONURL
+        self.onTaskChange = onTaskChange
         self.onClose = onClose
+        displayedTask = session.task
         super.init(nibName: nil, bundle: nil)
         preferredContentSize = NSSize(width: 430, height: 500)
     }
@@ -324,20 +796,46 @@ final class SessionContextViewController: NSViewController {
         row.translatesAutoresizingMaskIntoConstraints = false
         row.widthAnchor.constraint(equalToConstant: 402).isActive = true
 
-        let title = makeTitleLabel()
+        let title = makeTitleField()
         row.addArrangedSubview(title)
         row.addArrangedSubview(makeSpacer())
+        row.addArrangedSubview(makeEditTitleButton())
         row.addArrangedSubview(makeCloseButton())
         return row
     }
 
-    private func makeTitleLabel() -> NSTextField {
-        let label = NSTextField(labelWithString: session.task)
-        label.font = NSFont.systemFont(ofSize: 16, weight: .semibold)
-        label.lineBreakMode = .byTruncatingTail
-        label.maximumNumberOfLines = 1
-        label.translatesAutoresizingMaskIntoConstraints = false
-        return label
+    private func makeTitleField() -> NSTextField {
+        titleField.stringValue = displayedTask
+        titleField.font = NSFont.systemFont(ofSize: 16, weight: .semibold)
+        titleField.lineBreakMode = .byTruncatingTail
+        titleField.maximumNumberOfLines = 1
+        titleField.isEditable = false
+        titleField.isSelectable = false
+        titleField.isBordered = false
+        titleField.drawsBackground = false
+        titleField.isEnabled = true
+        titleField.toolTip = "Use the pencil button to rename"
+        titleField.translatesAutoresizingMaskIntoConstraints = false
+        return titleField
+    }
+
+    private func makeEditTitleButton() -> NSButton {
+        editTitleButton.title = ""
+        editTitleButton.target = self
+        editTitleButton.action = #selector(beginTitleEdit)
+        editTitleButton.bezelStyle = .inline
+        editTitleButton.isBordered = false
+        editTitleButton.toolTip = "Rename"
+        editTitleButton.setContentHuggingPriority(.required, for: .horizontal)
+        if let image = NSImage(systemSymbolName: "pencil", accessibilityDescription: "Rename") {
+            editTitleButton.image = image
+            editTitleButton.imagePosition = .imageOnly
+            editTitleButton.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 13, weight: .medium)
+        } else {
+            editTitleButton.title = "Edit"
+            editTitleButton.font = NSFont.systemFont(ofSize: 11, weight: .medium)
+        }
+        return editTitleButton
     }
 
     private func makeSpacer() -> NSView {
@@ -523,6 +1021,43 @@ final class SessionContextViewController: NSViewController {
         onClose()
     }
 
+    @objc private func beginTitleEdit() {
+        let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+        input.stringValue = displayedTask
+        input.lineBreakMode = .byTruncatingTail
+
+        let alert = NSAlert()
+        alert.messageText = "Rename Session"
+        alert.informativeText = "This changes the Catdex display name only."
+        alert.alertStyle = .informational
+        alert.accessoryView = input
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = input
+
+        NSApp.activate(ignoringOtherApps: true)
+        DispatchQueue.main.async { [weak self] in
+            input.selectText(nil)
+            let response = alert.runModal()
+            guard response == .alertFirstButtonReturn,
+                  let self
+            else { return }
+            self.applyTitle(input.stringValue)
+        }
+    }
+
+    private func applyTitle(_ rawValue: String) {
+        let nextTask = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !nextTask.isEmpty, nextTask != displayedTask else { return }
+
+        if onTaskChange(session.id, nextTask) {
+            displayedTask = nextTask
+            titleField.stringValue = nextTask
+        } else {
+            NSSound.beep()
+        }
+    }
+
     @objc private func copyContext() {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
@@ -540,11 +1075,17 @@ private struct IconSettings: Codable {
     var iconPaths: [String: String] = [:]
     var iconEmojis: [String: String] = [:]
     var floatingPanelOrigin: PanelOrigin?
+    var tokenUsageRange: UsageDateRangeSetting?
+    var hourlyTokenUsageRefreshEnabled: Bool?
+    var sessionTaskOverrides: [String: String] = [:]
 
     enum CodingKeys: String, CodingKey {
         case iconPaths
         case iconEmojis
         case floatingPanelOrigin
+        case tokenUsageRange
+        case hourlyTokenUsageRefreshEnabled
+        case sessionTaskOverrides
     }
 
     init() {}
@@ -554,6 +1095,15 @@ private struct IconSettings: Codable {
         iconPaths = try container.decodeIfPresent([String: String].self, forKey: .iconPaths) ?? [:]
         iconEmojis = try container.decodeIfPresent([String: String].self, forKey: .iconEmojis) ?? [:]
         floatingPanelOrigin = try container.decodeIfPresent(PanelOrigin.self, forKey: .floatingPanelOrigin)
+        tokenUsageRange = try container.decodeIfPresent(UsageDateRangeSetting.self, forKey: .tokenUsageRange)
+        hourlyTokenUsageRefreshEnabled = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .hourlyTokenUsageRefreshEnabled
+        )
+        sessionTaskOverrides = try container.decodeIfPresent(
+            [String: String].self,
+            forKey: .sessionTaskOverrides
+        ) ?? [:]
     }
 
     func encode(to encoder: Encoder) throws {
@@ -561,12 +1111,29 @@ private struct IconSettings: Codable {
         try container.encode(iconPaths, forKey: .iconPaths)
         try container.encode(iconEmojis, forKey: .iconEmojis)
         try container.encodeIfPresent(floatingPanelOrigin, forKey: .floatingPanelOrigin)
+        try container.encodeIfPresent(tokenUsageRange, forKey: .tokenUsageRange)
+        try container.encodeIfPresent(
+            hourlyTokenUsageRefreshEnabled,
+            forKey: .hourlyTokenUsageRefreshEnabled
+        )
+        try container.encode(sessionTaskOverrides, forKey: .sessionTaskOverrides)
     }
 }
 
 private struct PanelOrigin: Codable {
     var x: CGFloat
     var y: CGFloat
+}
+
+private struct UsageDateRangeSetting: Codable {
+    var startDate: String
+    var endDate: String
+}
+
+fileprivate struct UsageDateRange: Sendable {
+    var startDay: Date
+    var endDay: Date
+    var interval: DateInterval
 }
 
 final class IconSettingsStore {
@@ -600,6 +1167,61 @@ final class IconSettingsStore {
 
     func setFloatingPanelOrigin(_ origin: NSPoint) throws {
         settings.floatingPanelOrigin = PanelOrigin(x: origin.x, y: origin.y)
+        try save()
+    }
+
+    func hourlyTokenUsageRefreshEnabled() -> Bool {
+        settings.hourlyTokenUsageRefreshEnabled ?? true
+    }
+
+    func setHourlyTokenUsageRefreshEnabled(_ isEnabled: Bool) throws {
+        settings.hourlyTokenUsageRefreshEnabled = isEnabled
+        try save()
+    }
+
+    func sessionTaskOverride(for sessionID: String) -> String? {
+        guard let task = settings.sessionTaskOverrides[sessionID]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !task.isEmpty
+        else {
+            return nil
+        }
+        return task
+    }
+
+    func setSessionTaskOverride(_ task: String, for sessionID: String) throws {
+        let trimmed = task.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            settings.sessionTaskOverrides.removeValue(forKey: sessionID)
+        } else {
+            settings.sessionTaskOverrides[sessionID] = trimmed
+        }
+        try save()
+    }
+
+    fileprivate func tokenUsageRange(now: Date = Date(), calendar: Calendar = .current) -> UsageDateRange {
+        if let setting = settings.tokenUsageRange,
+           let start = parseDay(setting.startDate),
+           let end = parseDay(setting.endDate) {
+            return makeUsageRange(start: start, end: end, calendar: calendar)
+        }
+
+        let today = calendar.startOfDay(for: now)
+        let start = calendar.date(byAdding: .day, value: -29, to: today) ?? today
+        return makeUsageRange(start: start, end: today, calendar: calendar)
+    }
+
+    func setTokenUsageRange(start: Date, end: Date, calendar: Calendar = .current) throws {
+        let range = makeUsageRange(start: start, end: end, calendar: calendar)
+        settings.tokenUsageRange = UsageDateRangeSetting(
+            startDate: formatDay(range.startDay),
+            endDate: formatDay(range.endDay)
+        )
+        try save()
+    }
+
+    func resetTokenUsageRange() throws {
+        settings.tokenUsageRange = nil
         try save()
     }
 
@@ -642,6 +1264,144 @@ final class IconSettingsStore {
             return IconSettings()
         }
         return settings
+    }
+
+    private func makeUsageRange(start: Date, end: Date, calendar: Calendar) -> UsageDateRange {
+        let startDay = calendar.startOfDay(for: start)
+        let endDay = calendar.startOfDay(for: end)
+        let orderedStart = min(startDay, endDay)
+        let orderedEnd = max(startDay, endDay)
+        let endExclusive = calendar.date(byAdding: .day, value: 1, to: orderedEnd) ?? orderedEnd
+        return UsageDateRange(
+            startDay: orderedStart,
+            endDay: orderedEnd,
+            interval: DateInterval(start: orderedStart, end: endExclusive)
+        )
+    }
+
+    private func parseDay(_ string: String) -> Date? {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.date(from: string)
+    }
+
+    private func formatDay(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
+    }
+}
+
+@MainActor
+final class UsageRangeWindowController: NSWindowController {
+    private let settingsStore: IconSettingsStore
+    private let onChange: () -> Void
+    private let startPicker = NSDatePicker()
+    private let endPicker = NSDatePicker()
+
+    init(settingsStore: IconSettingsStore, onChange: @escaping () -> Void) {
+        self.settingsStore = settingsStore
+        self.onChange = onChange
+
+        let contentView = NSView()
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 340, height: 170),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Token Usage Range"
+        window.contentView = contentView
+        window.isReleasedWhenClosed = false
+        super.init(window: window)
+
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 12
+        stack.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 16)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(stack)
+
+        stack.addArrangedSubview(makeDateRow(title: "Start", picker: startPicker))
+        stack.addArrangedSubview(makeDateRow(title: "End", picker: endPicker))
+        stack.addArrangedSubview(makeButtonRow())
+
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            stack.topAnchor.constraint(equalTo: contentView.topAnchor),
+            stack.bottomAnchor.constraint(equalTo: contentView.bottomAnchor)
+        ])
+
+        reload()
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func reload() {
+        let range = settingsStore.tokenUsageRange()
+        startPicker.dateValue = range.startDay
+        endPicker.dateValue = range.endDay
+    }
+
+    private func makeDateRow(title: String, picker: NSDatePicker) -> NSStackView {
+        let row = NSStackView()
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 10
+
+        let label = NSTextField(labelWithString: title)
+        label.font = NSFont.systemFont(ofSize: 13, weight: .medium)
+        label.widthAnchor.constraint(equalToConstant: 52).isActive = true
+
+        picker.datePickerElements = .yearMonthDay
+        picker.datePickerStyle = .textFieldAndStepper
+        picker.translatesAutoresizingMaskIntoConstraints = false
+        picker.widthAnchor.constraint(equalToConstant: 170).isActive = true
+
+        row.addArrangedSubview(label)
+        row.addArrangedSubview(picker)
+        return row
+    }
+
+    private func makeButtonRow() -> NSStackView {
+        let row = NSStackView()
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 8
+
+        let reset = NSButton(title: "Reset 30 Days", target: self, action: #selector(resetRange))
+        let apply = NSButton(title: "Apply", target: self, action: #selector(applyRange))
+        apply.bezelStyle = .rounded
+        reset.bezelStyle = .rounded
+
+        let spacer = NSView()
+        spacer.translatesAutoresizingMaskIntoConstraints = false
+        spacer.widthAnchor.constraint(greaterThanOrEqualToConstant: 62).isActive = true
+
+        row.addArrangedSubview(spacer)
+        row.addArrangedSubview(reset)
+        row.addArrangedSubview(apply)
+        return row
+    }
+
+    @objc private func applyRange() {
+        try? settingsStore.setTokenUsageRange(start: startPicker.dateValue, end: endPicker.dateValue)
+        close()
+        onChange()
+    }
+
+    @objc private func resetRange() {
+        try? settingsStore.resetTokenUsageRange()
+        reload()
+        onChange()
     }
 }
 
