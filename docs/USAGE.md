@@ -141,6 +141,16 @@ Use:
 - `Set Sessions Folder...`: choose a custom Codex sessions folder
 - `Reset Sessions Folder`: use `$CODEX_HOME/sessions` when available, otherwise `~/.codex/sessions`
 
+To find the sessions folder:
+
+```bash
+echo "${CODEX_HOME:-$HOME/.codex}/sessions"
+open "${CODEX_HOME:-$HOME/.codex}/sessions"
+find "${CODEX_HOME:-$HOME/.codex}/sessions" -name "*.jsonl" | head
+```
+
+Use `Set Sessions Folder...` when the folder shown by `Path` does not match where Codex writes JSONL session files.
+
 The selected date range is saved in:
 
 ```text
@@ -514,6 +524,16 @@ review > failed > stale > responding > starting/running > waiting
 - `Reset Usage Range (30 Days)`: 직접 설정한 기간을 지우고 기본 30일로 복구
 - `Set Sessions Folder...`: Codex sessions 폴더 직접 선택
 - `Reset Sessions Folder`: `$CODEX_HOME/sessions`가 있으면 사용하고, 없으면 `~/.codex/sessions` 사용
+
+sessions 폴더를 찾으려면:
+
+```bash
+echo "${CODEX_HOME:-$HOME/.codex}/sessions"
+open "${CODEX_HOME:-$HOME/.codex}/sessions"
+find "${CODEX_HOME:-$HOME/.codex}/sessions" -name "*.jsonl" | head
+```
+
+`Path`에 표시된 폴더와 Codex가 JSONL 세션 파일을 쓰는 위치가 다르면 `Set Sessions Folder...`로 직접 선택합니다.
 
 선택한 기간은 여기에 저장됩니다.
 

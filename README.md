@@ -161,6 +161,16 @@ Use:
 - `Set Sessions Folder...`: choose a custom Codex sessions folder
 - `Reset Sessions Folder`: use `$CODEX_HOME/sessions` when available, otherwise `~/.codex/sessions`
 
+To find the Codex sessions folder from a terminal:
+
+```bash
+echo "${CODEX_HOME:-$HOME/.codex}/sessions"
+open "${CODEX_HOME:-$HOME/.codex}/sessions"
+find "${CODEX_HOME:-$HOME/.codex}/sessions" -name "*.jsonl" | head
+```
+
+The Token Usage submenu also shows `Path`, which is the folder Catdex is currently scanning.
+
 ## Custom Icons
 
 Open the menu bar item and choose `Settings...`.
@@ -303,7 +313,6 @@ Completion notifications are noisy. Catdex only notifies when Codex likely needs
 ## Roadmap Ideas
 
 - optional screenshot/GIF in README
-- Homebrew formula
 - persistent floating panel position
 - packaged app release
 - import or inspect existing Codex sessions
@@ -433,6 +442,16 @@ review > failed > stale > responding > starting/running > waiting
 - `Reset Usage Range (30 Days)`: 기본 30일 범위로 복구
 - `Set Sessions Folder...`: Codex sessions 폴더 직접 선택
 - `Reset Sessions Folder`: `$CODEX_HOME/sessions`가 있으면 사용하고, 없으면 `~/.codex/sessions` 사용
+
+터미널에서 Codex sessions 폴더를 찾으려면:
+
+```bash
+echo "${CODEX_HOME:-$HOME/.codex}/sessions"
+open "${CODEX_HOME:-$HOME/.codex}/sessions"
+find "${CODEX_HOME:-$HOME/.codex}/sessions" -name "*.jsonl" | head
+```
+
+Token Usage 하위 메뉴의 `Path`는 Catdex가 현재 스캔 중인 폴더입니다.
 
 ## 아이콘 설정
 
