@@ -32,6 +32,7 @@ public struct CatdexSession: Codable, Equatable, Identifiable, Sendable {
     public var workspace: String
     public var branch: String?
     public var updatedAt: Date
+    public var wrapperPID: Int32?
     public var pid: Int32?
     public var lastMessage: String
     public var reviewOptions: [String]?
@@ -46,6 +47,7 @@ public struct CatdexSession: Codable, Equatable, Identifiable, Sendable {
         workspace: String,
         branch: String? = nil,
         updatedAt: Date,
+        wrapperPID: Int32? = nil,
         pid: Int32? = nil,
         lastMessage: String,
         reviewOptions: [String]? = nil,
@@ -59,6 +61,7 @@ public struct CatdexSession: Codable, Equatable, Identifiable, Sendable {
         self.workspace = workspace
         self.branch = branch
         self.updatedAt = updatedAt
+        self.wrapperPID = wrapperPID
         self.pid = pid
         self.lastMessage = lastMessage
         self.reviewOptions = reviewOptions

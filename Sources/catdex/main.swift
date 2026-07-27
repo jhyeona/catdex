@@ -272,6 +272,7 @@ final class SessionRunner {
             workspace: workspace,
             branch: branch,
             updatedAt: Date(),
+            wrapperPID: getpid(),
             pid: nil,
             lastMessage: "🐾 Codex starting",
             logPath: logURL.path

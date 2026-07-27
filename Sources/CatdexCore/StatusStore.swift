@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 public struct StatusStore: Sendable {
@@ -82,7 +83,12 @@ public struct StatusStore: Sendable {
                 }
 
                 if session.state.isActive,
-                   now.timeIntervalSince(session.updatedAt) > staleAfter {
+                   isDisconnected(session) {
+                    session.state = .stale
+                    session.lastMessage = "Catdex wrapper process ended"
+                    try? save(session)
+                } else if session.state.isActive,
+                          now.timeIntervalSince(session.updatedAt) > staleAfter {
                     session.state = .stale
                     session.lastMessage = "No heartbeat since \(session.updatedAt.formatted())"
                     try? save(session)
@@ -130,6 +136,81 @@ public struct StatusStore: Sendable {
         }
 
         return removed
+    }
+
+    @discardableResult
+    public func pruneStale(olderThan interval: TimeInterval, now: Date = Date()) throws -> Int {
+        guard let urls = try? FileManager.default.contentsOfDirectory(
+            at: paths.sessionsDirectory,
+            includingPropertiesForKeys: nil
+        ) else {
+            return 0
+        }
+
+        var removed = 0
+        for url in urls where url.pathExtension == "json" {
+            guard let data = try? Data(contentsOf: url),
+                  let session = try? decoder.decode(CatdexSession.self, from: data),
+                  session.state == .stale,
+                  now.timeIntervalSince(session.updatedAt) > interval
+            else {
+                continue
+            }
+
+            try removeSession(id: session.id)
+            removed += 1
+        }
+
+        return removed
+    }
+
+    @discardableResult
+    public func pruneMissingCodexSessions() throws -> Int {
+        guard let urls = try? FileManager.default.contentsOfDirectory(
+            at: paths.sessionsDirectory,
+            includingPropertiesForKeys: nil
+        ) else {
+            return 0
+        }
+
+        var removed = 0
+        for url in urls where url.pathExtension == "json" {
+            guard let data = try? Data(contentsOf: url),
+                  let session = try? decoder.decode(CatdexSession.self, from: data),
+                  let codexSessionPath = session.codexSessionPath,
+                  !codexSessionPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  !FileManager.default.fileExists(atPath: codexSessionPath)
+            else {
+                continue
+            }
+
+            try removeSession(id: session.id)
+            removed += 1
+        }
+
+        return removed
+    }
+
+    private func isDisconnected(_ session: CatdexSession) -> Bool {
+        guard let wrapperPID = session.wrapperPID ?? legacyWrapperPID(from: session.id) else {
+            return false
+        }
+
+        return !isProcessAlive(wrapperPID)
+    }
+
+    private func legacyWrapperPID(from id: String) -> Int32? {
+        let parts = id.split(separator: "-", maxSplits: 3)
+        guard parts.count >= 3 else { return nil }
+        return Int32(parts[2])
+    }
+
+    private func isProcessAlive(_ pid: Int32) -> Bool {
+        if Darwin.kill(pid, 0) == 0 {
+            return true
+        }
+
+        return errno == EPERM
     }
 }
 

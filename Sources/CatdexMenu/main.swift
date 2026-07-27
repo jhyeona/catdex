@@ -59,8 +59,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func refresh() {
         _ = try? store.pruneFinished(olderThan: 60 * 60 * 24)
+        _ = try? store.pruneMissingCodexSessions()
         iconProvider.reload()
-        let loadedSessions = applySessionTaskOverrides(to: store.loadSessions())
+        var loadedSessions = store.loadSessions()
+        if loadedSessions.contains(where: { $0.state == .stale }) {
+            _ = try? store.pruneStale(olderThan: 0)
+            loadedSessions = store.loadSessions()
+        }
+        loadedSessions = applySessionTaskOverrides(to: loadedSessions)
         refreshTokenUsageIfSessionFinished(loadedSessions)
         sessions = loadedSessions
         statusItem.button?.title = statusTitle(for: sessions)

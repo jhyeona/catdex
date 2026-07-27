@@ -94,6 +94,44 @@ final class StatusStoreTests: XCTestCase {
         XCTAssertEqual(sessions.first?.state, .stale)
     }
 
+    func testActiveSessionBecomesStaleWhenWrapperProcessIsGone() throws {
+        let root = try temporaryRoot()
+        let store = StatusStore(paths: CatdexPaths(root: root))
+        try store.save(CatdexSession(
+            id: "wrapper-gone",
+            state: .waiting,
+            task: "Old",
+            workspace: "/tmp/old",
+            updatedAt: Date(timeIntervalSince1970: 100),
+            wrapperPID: 999_999,
+            pid: nil,
+            lastMessage: "waiting"
+        ))
+
+        let sessions = store.loadSessions(now: Date(timeIntervalSince1970: 101), staleAfter: 60)
+
+        XCTAssertEqual(sessions.first?.state, .stale)
+        XCTAssertEqual(sessions.first?.lastMessage, "Catdex wrapper process ended")
+    }
+
+    func testLegacyActiveSessionBecomesStaleWhenPidInIDIsGone() throws {
+        let root = try temporaryRoot()
+        let store = StatusStore(paths: CatdexPaths(root: root))
+        try store.save(CatdexSession(
+            id: "20260619-103138-999999-work",
+            state: .waiting,
+            task: "Old",
+            workspace: "/tmp/old",
+            updatedAt: Date(timeIntervalSince1970: 100),
+            lastMessage: "waiting"
+        ))
+
+        let sessions = store.loadSessions(now: Date(timeIntervalSince1970: 101), staleAfter: 60)
+
+        XCTAssertEqual(sessions.first?.state, .stale)
+        XCTAssertEqual(sessions.first?.lastMessage, "Catdex wrapper process ended")
+    }
+
     func testStaleTransitionIsPersistedForPruning() throws {
         let root = try temporaryRoot()
         let store = StatusStore(paths: CatdexPaths(root: root))
@@ -127,6 +165,85 @@ final class StatusStoreTests: XCTestCase {
 
         XCTAssertEqual(removed, 1)
         XCTAssertEqual(Set(ids), ["new-done", "running"])
+    }
+
+    func testPruneStaleRemovesOnlyStaleSessions() throws {
+        let root = try temporaryRoot()
+        let store = StatusStore(paths: CatdexPaths(root: root))
+        let now = Date(timeIntervalSince1970: 1_000)
+
+        try store.save(CatdexSession(
+            id: "stale",
+            state: .stale,
+            task: "Stale",
+            workspace: "/tmp",
+            updatedAt: Date(timeIntervalSince1970: 900),
+            lastMessage: "stale"
+        ))
+        try store.save(CatdexSession(
+            id: "failed",
+            state: .failed,
+            task: "Failed",
+            workspace: "/tmp",
+            updatedAt: Date(timeIntervalSince1970: 900),
+            lastMessage: "failed"
+        ))
+        try store.save(CatdexSession(
+            id: "running",
+            state: .running,
+            task: "Running",
+            workspace: "/tmp",
+            updatedAt: now,
+            lastMessage: "running"
+        ))
+
+        let removed = try store.pruneStale(olderThan: 0, now: now)
+        let ids = Set(store.loadSessions(now: now, staleAfter: 2_000).map(\.id))
+
+        XCTAssertEqual(removed, 1)
+        XCTAssertEqual(ids, ["failed", "running"])
+    }
+
+    func testPruneMissingCodexSessionsRemovesSessionsWhoseCodexFileDisappeared() throws {
+        let root = try temporaryRoot()
+        let store = StatusStore(paths: CatdexPaths(root: root))
+        let existingCodexSession = root.appendingPathComponent("existing.jsonl")
+        let missingCodexSession = root.appendingPathComponent("missing.jsonl")
+        try Data("{}".utf8).write(to: existingCodexSession)
+
+        try store.save(CatdexSession(
+            id: "existing",
+            state: .waiting,
+            task: "Existing",
+            workspace: "/tmp/project",
+            updatedAt: Date(),
+            lastMessage: "waiting",
+            codexSessionPath: existingCodexSession.path
+        ))
+        try store.save(CatdexSession(
+            id: "missing",
+            state: .waiting,
+            task: "Missing",
+            workspace: "/tmp/project",
+            updatedAt: Date(),
+            lastMessage: "waiting",
+            codexSessionPath: missingCodexSession.path
+        ))
+        try store.save(CatdexSession(
+            id: "unlinked",
+            state: .starting,
+            task: "Unlinked",
+            workspace: "/tmp/project",
+            updatedAt: Date(),
+            lastMessage: "starting"
+        ))
+
+        let removed = try store.pruneMissingCodexSessions()
+        let ids = Set(store.loadSessions(staleAfter: 2_000).map(\.id))
+
+        XCTAssertEqual(removed, 1)
+        XCTAssertEqual(ids, ["existing", "unlinked"])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: store.sessionURL(for: "missing").path))
     }
 
     func testRemoveSessionDeletesSessionAndLog() throws {
