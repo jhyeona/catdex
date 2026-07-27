@@ -76,7 +76,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func applySessionTaskOverrides(to sessions: [CatdexSession]) -> [CatdexSession] {
         sessions.map { session in
-            guard let task = iconStore.sessionTaskOverride(for: session.id) else {
+            guard let task = iconStore.sessionTaskOverride(for: session.id)
+                ?? iconStore.workspaceTaskOverride(for: session.workspace)
+            else {
                 return session
             }
             var renamedSession = session
@@ -456,12 +458,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func showSessionContext(for session: CatdexSession, relativeTo sourceView: NSView) {
         let controller = contextPopoverController ?? SessionContextPopoverController(
             store: store,
-            onTaskChange: { [weak self] sessionID, task in
+            onTaskChange: { [weak self] session, task in
                 guard let self else { return false }
                 do {
-                    try self.iconStore.setSessionTaskOverride(task, for: sessionID)
-                    try? self.store.updateSession(id: sessionID) { session in
-                        session.task = task
+                    try self.iconStore.setSessionTaskOverride(task, for: session.id)
+                    try self.iconStore.setWorkspaceTaskOverride(task, for: session.workspace)
+                    try? self.store.updateSession(id: session.id) { storedSession in
+                        storedSession.task = task
                     }
                     self.refresh()
                     return true
@@ -806,11 +809,11 @@ private final class UsageMenuView: NSView {
 @MainActor
 final class SessionContextPopoverController {
     private let store: StatusStore
-    private let onTaskChange: (String, String) -> Bool
+    private let onTaskChange: (CatdexSession, String) -> Bool
     private let reader = SessionContextReader(maxEvents: 8)
     private let popover = NSPopover()
 
-    init(store: StatusStore, onTaskChange: @escaping (String, String) -> Bool) {
+    init(store: StatusStore, onTaskChange: @escaping (CatdexSession, String) -> Bool) {
         self.store = store
         self.onTaskChange = onTaskChange
         popover.behavior = .transient
@@ -841,7 +844,7 @@ final class SessionContextViewController: NSViewController {
     private let session: CatdexSession
     private let context: CatdexSessionContext
     private let sessionJSONURL: URL
-    private let onTaskChange: (String, String) -> Bool
+    private let onTaskChange: (CatdexSession, String) -> Bool
     private let onClose: () -> Void
     private let titleField = NSTextField()
     private let editTitleButton = NSButton()
@@ -851,7 +854,7 @@ final class SessionContextViewController: NSViewController {
         session: CatdexSession,
         context: CatdexSessionContext,
         sessionJSONURL: URL,
-        onTaskChange: @escaping (String, String) -> Bool,
+        onTaskChange: @escaping (CatdexSession, String) -> Bool,
         onClose: @escaping () -> Void
     ) {
         self.session = session
@@ -1171,7 +1174,7 @@ final class SessionContextViewController: NSViewController {
         let nextTask = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !nextTask.isEmpty, nextTask != displayedTask else { return }
 
-        if onTaskChange(session.id, nextTask) {
+        if onTaskChange(session, nextTask) {
             displayedTask = nextTask
             titleField.stringValue = nextTask
         } else {
@@ -1201,6 +1204,7 @@ private struct IconSettings: Codable {
     var codexSessionsPath: String?
     var codexDefaultPrompt: String?
     var sessionTaskOverrides: [String: String] = [:]
+    var workspaceTaskOverrides: [String: String] = [:]
 
     enum CodingKeys: String, CodingKey {
         case iconPaths
@@ -1212,6 +1216,7 @@ private struct IconSettings: Codable {
         case codexDefaultPrompt
         case codexInitialPrompt
         case sessionTaskOverrides
+        case workspaceTaskOverrides
     }
 
     init() {}
@@ -1233,6 +1238,10 @@ private struct IconSettings: Codable {
             [String: String].self,
             forKey: .sessionTaskOverrides
         ) ?? [:]
+        workspaceTaskOverrides = try container.decodeIfPresent(
+            [String: String].self,
+            forKey: .workspaceTaskOverrides
+        ) ?? [:]
     }
 
     func encode(to encoder: Encoder) throws {
@@ -1248,6 +1257,7 @@ private struct IconSettings: Codable {
         try container.encodeIfPresent(codexSessionsPath, forKey: .codexSessionsPath)
         try container.encodeIfPresent(codexDefaultPrompt, forKey: .codexDefaultPrompt)
         try container.encode(sessionTaskOverrides, forKey: .sessionTaskOverrides)
+        try container.encode(workspaceTaskOverrides, forKey: .workspaceTaskOverrides)
     }
 }
 
@@ -1374,6 +1384,29 @@ final class IconSettingsStore {
             settings.sessionTaskOverrides.removeValue(forKey: sessionID)
         } else {
             settings.sessionTaskOverrides[sessionID] = trimmed
+        }
+        try save()
+    }
+
+    func workspaceTaskOverride(for workspace: String) -> String? {
+        guard let task = settings.workspaceTaskOverrides[workspace]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !task.isEmpty
+        else {
+            return nil
+        }
+        return task
+    }
+
+    func setWorkspaceTaskOverride(_ task: String, for workspace: String) throws {
+        let trimmedWorkspace = workspace.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedWorkspace.isEmpty else { return }
+
+        let trimmedTask = task.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedTask.isEmpty {
+            settings.workspaceTaskOverrides.removeValue(forKey: trimmedWorkspace)
+        } else {
+            settings.workspaceTaskOverrides[trimmedWorkspace] = trimmedTask
         }
         try save()
     }
