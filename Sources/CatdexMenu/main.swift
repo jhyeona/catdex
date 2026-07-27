@@ -1193,6 +1193,7 @@ private struct IconSettings: Codable {
     var tokenUsageRange: UsageDateRangeSetting?
     var hourlyTokenUsageRefreshEnabled: Bool?
     var codexSessionsPath: String?
+    var codexDefaultPrompt: String?
     var sessionTaskOverrides: [String: String] = [:]
 
     enum CodingKeys: String, CodingKey {
@@ -1202,6 +1203,8 @@ private struct IconSettings: Codable {
         case tokenUsageRange
         case hourlyTokenUsageRefreshEnabled
         case codexSessionsPath
+        case codexDefaultPrompt
+        case codexInitialPrompt
         case sessionTaskOverrides
     }
 
@@ -1218,6 +1221,8 @@ private struct IconSettings: Codable {
             forKey: .hourlyTokenUsageRefreshEnabled
         )
         codexSessionsPath = try container.decodeIfPresent(String.self, forKey: .codexSessionsPath)
+        codexDefaultPrompt = try container.decodeIfPresent(String.self, forKey: .codexDefaultPrompt)
+            ?? container.decodeIfPresent(String.self, forKey: .codexInitialPrompt)
         sessionTaskOverrides = try container.decodeIfPresent(
             [String: String].self,
             forKey: .sessionTaskOverrides
@@ -1235,6 +1240,7 @@ private struct IconSettings: Codable {
             forKey: .hourlyTokenUsageRefreshEnabled
         )
         try container.encodeIfPresent(codexSessionsPath, forKey: .codexSessionsPath)
+        try container.encodeIfPresent(codexDefaultPrompt, forKey: .codexDefaultPrompt)
         try container.encode(sessionTaskOverrides, forKey: .sessionTaskOverrides)
     }
 }
@@ -1319,6 +1325,30 @@ final class IconSettingsStore {
 
     func resetCodexSessionsPath() throws {
         settings.codexSessionsPath = nil
+        try save()
+    }
+
+    func codexDefaultPrompt() -> String? {
+        guard let prompt = settings.codexDefaultPrompt?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !prompt.isEmpty
+        else {
+            return nil
+        }
+        return prompt
+    }
+
+    func setCodexDefaultPrompt(_ prompt: String) throws {
+        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            settings.codexDefaultPrompt = nil
+        } else {
+            settings.codexDefaultPrompt = trimmed
+        }
+        try save()
+    }
+
+    func resetCodexDefaultPrompt() throws {
+        settings.codexDefaultPrompt = nil
         try save()
     }
 
@@ -1597,6 +1627,7 @@ final class IconSettingsWindowController: NSWindowController {
     private let iconStore: IconSettingsStore
     private let iconProvider: StateIconProvider
     private let onChange: () -> Void
+    private weak var defaultPromptField: NSTextField?
     private weak var activeEmojiInput: NSTextField?
 
     init(iconStore: IconSettingsStore, iconProvider: StateIconProvider, onChange: @escaping () -> Void) {
@@ -1604,7 +1635,7 @@ final class IconSettingsWindowController: NSWindowController {
         self.iconProvider = iconProvider
         self.onChange = onChange
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 620, height: 380),
+            contentRect: NSRect(x: 0, y: 0, width: 620, height: 460),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -1626,9 +1657,12 @@ final class IconSettingsWindowController: NSWindowController {
 
         let stack = NSStackView()
         stack.orientation = .vertical
-        stack.spacing = 10
+        stack.spacing = 12
         stack.alignment = .leading
         stack.translatesAutoresizingMaskIntoConstraints = false
+
+        stack.addArrangedSubview(makeDefaultPromptSection())
+        stack.addArrangedSubview(separator(width: 580))
 
         let title = NSTextField(labelWithString: "Status Icons")
         title.font = NSFont.systemFont(ofSize: 17, weight: .semibold)
@@ -1656,6 +1690,61 @@ final class IconSettingsWindowController: NSWindowController {
         ])
 
         window?.contentView = root
+    }
+
+    private func makeDefaultPromptSection() -> NSView {
+        let section = NSStackView()
+        section.orientation = .vertical
+        section.spacing = 8
+        section.alignment = .leading
+        section.translatesAutoresizingMaskIntoConstraints = false
+
+        let title = NSTextField(labelWithString: "Codex Default Prompt")
+        title.font = NSFont.systemFont(ofSize: 17, weight: .semibold)
+        section.addArrangedSubview(title)
+
+        let detail = NSTextField(labelWithString: "Used when catdex starts Codex without a prompt. Existing command prompts are left unchanged.")
+        detail.font = NSFont.systemFont(ofSize: 12)
+        detail.textColor = .secondaryLabelColor
+        detail.lineBreakMode = .byWordWrapping
+        detail.maximumNumberOfLines = 2
+        detail.translatesAutoresizingMaskIntoConstraints = false
+        detail.widthAnchor.constraint(equalToConstant: 580).isActive = true
+        section.addArrangedSubview(detail)
+
+        let row = NSStackView()
+        row.orientation = .horizontal
+        row.spacing = 8
+        row.alignment = .centerY
+        row.translatesAutoresizingMaskIntoConstraints = false
+
+        let input = NSTextField()
+        input.stringValue = iconStore.codexDefaultPrompt() ?? ""
+        input.placeholderString = "AGENTS 확인하여 룰 확인"
+        input.target = self
+        input.action = #selector(saveDefaultPrompt)
+        input.translatesAutoresizingMaskIntoConstraints = false
+        row.addArrangedSubview(input)
+        input.widthAnchor.constraint(equalToConstant: 390).isActive = true
+        defaultPromptField = input
+
+        let saveButton = NSButton(title: "Save", target: self, action: #selector(saveDefaultPrompt))
+        row.addArrangedSubview(saveButton)
+
+        let resetButton = NSButton(title: "Reset", target: self, action: #selector(resetDefaultPrompt))
+        resetButton.isEnabled = iconStore.codexDefaultPrompt() != nil
+        row.addArrangedSubview(resetButton)
+
+        section.addArrangedSubview(row)
+        return section
+    }
+
+    private func separator(width: CGFloat) -> NSBox {
+        let box = NSBox()
+        box.boxType = .separator
+        box.translatesAutoresizingMaskIntoConstraints = false
+        box.widthAnchor.constraint(equalToConstant: width).isActive = true
+        return box
     }
 
     private func makeRow(for state: CatdexState) -> NSView {
@@ -1724,6 +1813,26 @@ final class IconSettingsWindowController: NSWindowController {
             self.iconProvider.reload()
             self.rebuildContent()
             self.onChange()
+        }
+    }
+
+    @objc private func saveDefaultPrompt() {
+        do {
+            try iconStore.setCodexDefaultPrompt(defaultPromptField?.stringValue ?? "")
+            rebuildContent()
+            onChange()
+        } catch {
+            NSSound.beep()
+        }
+    }
+
+    @objc private func resetDefaultPrompt() {
+        do {
+            try iconStore.resetCodexDefaultPrompt()
+            rebuildContent()
+            onChange()
+        } catch {
+            NSSound.beep()
         }
     }
 

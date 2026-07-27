@@ -79,9 +79,69 @@ struct CatdexOptions {
             mode: .run,
             task: taskParts.isEmpty ? nil : taskParts.joined(separator: " "),
             codexCommand: codexCommand,
-            codexArguments: codexArguments,
+            codexArguments: applyDefaultPromptIfNeeded(to: codexArguments),
             dryRun: dryRun
         )
+    }
+
+    private static func applyDefaultPromptIfNeeded(to codexArguments: [String]) -> [String] {
+        guard shouldApplyDefaultPrompt(to: codexArguments),
+              let prompt = CatdexSettingsReader().codexDefaultPrompt()
+        else {
+            return codexArguments
+        }
+
+        return codexArguments + [prompt]
+    }
+
+    private static func shouldApplyDefaultPrompt(to codexArguments: [String]) -> Bool {
+        let valueOptions: Set<String> = [
+            "--add-dir",
+            "--ask-for-approval",
+            "--cd",
+            "--config",
+            "--image",
+            "--local-provider",
+            "--model",
+            "--profile",
+            "--remote",
+            "--remote-auth-token-env",
+            "--sandbox"
+        ]
+        let shortValueOptions: Set<String> = ["-a", "-c", "-C", "-i", "-m", "-p", "-s"]
+        let helpOptions: Set<String> = ["--help", "-h", "--version", "-V"]
+
+        var skipNext = false
+        for argument in codexArguments {
+            if skipNext {
+                skipNext = false
+                continue
+            }
+
+            if helpOptions.contains(argument) {
+                return false
+            }
+
+            if argument.hasPrefix("--") {
+                let option = String(argument.split(separator: "=", maxSplits: 1).first ?? "")
+                if valueOptions.contains(option), !argument.contains("=") {
+                    skipNext = true
+                }
+                continue
+            }
+
+            if argument.hasPrefix("-") {
+                let option = String(argument.prefix(2))
+                if shortValueOptions.contains(option), argument.count == 2 {
+                    skipNext = true
+                }
+                continue
+            }
+
+            return false
+        }
+
+        return true
     }
 }
 

@@ -161,6 +161,8 @@ The selected date range is saved in:
 
 Open the menu bar item and choose `Settings...`.
 
+`Codex Default Prompt` is saved in `settings.json` and is applied when `catdex` starts Codex without an explicit prompt. For example, setting it to `AGENTS 확인하여 룰 확인` makes plain `catdex` runs start Codex with that prompt.
+
 For each state:
 
 - `Choose...`: select an image file
@@ -191,6 +193,8 @@ catdex "investigate duplicate reminders"
 ```
 
 Catdex uses the current project folder as the initial task name. Prompts are forwarded to Codex, but they do not change the displayed task name.
+
+If `Codex Default Prompt` is set in `Settings...`, Catdex appends it as the Codex prompt when there is no explicit prompt. This applies to runs like `catdex` and `catdex --model gpt-5.4`, but not to `catdex "investigate duplicate reminders"`.
 
 To rename the displayed task, click a floating-panel cell, then click the pencil button in the context popover and enter a new name. The edited name is stored in Catdex session state and is used by the menu, floating panel, and popover.
 
@@ -545,6 +549,8 @@ find "${CODEX_HOME:-$HOME/.codex}/sessions" -name "*.jsonl" | head
 
 메뉴바에서 `Settings...`를 엽니다.
 
+`Codex Default Prompt`에 `AGENTS 확인하여 룰 확인` 같은 문구를 저장하면, 명시 프롬프트 없이 `catdex`가 Codex를 시작할 때 해당 입력을 자동 전달합니다.
+
 상태별로 다음을 설정할 수 있습니다.
 
 - `Choose...`: 이미지 파일 선택
@@ -575,6 +581,8 @@ catdex "배치 중복 발송 조사"
 ```
 
 Catdex는 현재 프로젝트 폴더명을 초기 작업명으로 사용합니다. 프롬프트는 Codex에 그대로 전달하지만 메뉴에 보이는 작업명은 바꾸지 않습니다.
+
+`Settings...`에서 `Codex Default Prompt`를 설정해두면 `catdex`, `catdex --model gpt-5.4`처럼 프롬프트 없이 실행할 때 기본 입력이 Codex 프롬프트로 붙습니다. `catdex "배치 중복 발송 조사"`처럼 직접 입력한 프롬프트는 변경하지 않습니다.
 
 표시 작업명을 바꾸려면 플로팅 패널 셀을 클릭한 뒤 컨텍스트 팝오버의 연필 버튼을 클릭하고 새 이름을 입력합니다. 수정한 이름은 Catdex 세션 상태에 저장되고 메뉴, 플로팅 패널, 팝오버에 함께 적용됩니다.
 

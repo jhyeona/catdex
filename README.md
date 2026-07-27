@@ -43,6 +43,7 @@ Catdex gives you a small ambient dashboard for local Codex work:
 | Session context | Click a floating-panel cell to inspect the latest prompt, final answer, paths, and actions |
 | Session actions | Open workspace, log, copy context, or reveal session JSON |
 | Token usage | Review token totals for a configurable date range, defaulting to the last 30 days |
+| Default prompt | Start Codex with a saved default prompt when `catdex` is launched without one |
 | Cleanup tools | `catdex cleanup` and `catdex doctor` included |
 
 ## Requirements
@@ -93,6 +94,8 @@ catdex --model gpt-5.4 "debug the reminder job"
 ```
 
 Catdex uses the current project folder as the initial display name. To rename it, click the pencil button in the floating-panel context popover and enter a new name.
+
+Set `Codex Default Prompt` in `Settings...` to prefill runs like `catdex` or `catdex --model gpt-5.4`. If you pass a prompt explicitly, Catdex forwards that prompt unchanged.
 
 Use a custom Codex executable:
 
@@ -174,6 +177,8 @@ The Token Usage submenu also shows `Path`, which is the folder Catdex is current
 ## Custom Icons
 
 Open the menu bar item and choose `Settings...`.
+
+`Codex Default Prompt` is saved to `settings.json` and is used only when `catdex` starts Codex without an explicit prompt. For example, set it to `AGENTS 확인하여 룰 확인` to start plain `catdex` runs with that prompt.
 
 For every state you can set:
 
@@ -352,6 +357,7 @@ Catdex는 로컬 Codex 작업을 위한 작은 상태판입니다.
 - 세션별 상태 아이콘과 작업명 표시
 - 플로팅 패널에서 마지막 질문/최종 답변 컨텍스트 확인
 - 기본 30일 또는 직접 설정한 기간의 토큰 사용량 확인
+- 프롬프트 없이 `catdex` 실행 시 사용할 기본 Codex 입력 설정
 - `review` 상태에서 macOS 알림
 - 상태별 이모지/이미지 아이콘 커스터마이징
 - heartbeat가 끊기면 `stale`로 표시
@@ -388,6 +394,8 @@ catdex --model gpt-5.4 "리마인더 배치 디버깅"
 ```
 
 Catdex는 현재 프로젝트 폴더명을 초기 표시명으로 사용합니다. 이름을 바꾸려면 플로팅 패널 컨텍스트 팝오버의 연필 버튼을 클릭하고 새 이름을 입력합니다.
+
+`Settings...`의 `Codex Default Prompt`에 `AGENTS 확인하여 룰 확인` 같은 문구를 저장하면, `catdex` 또는 `catdex --model ...`처럼 프롬프트 없이 시작할 때 해당 입력을 Codex에 자동 전달합니다. 직접 프롬프트를 넘긴 실행은 그대로 유지됩니다.
 
 ## 상태
 
