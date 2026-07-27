@@ -413,7 +413,11 @@ final class SessionRunner {
                     pid: pid,
                     codexSessionPath: snapshot.sessionPath
                 ), snapshot.state == .review, previousState != .review {
-                    self.sendNotification(title: "🐱❓ Codex needs review", body: task)
+                    let projectName = URL(fileURLWithPath: self.workspace).lastPathComponent
+                    self.sendNotification(
+                        title: "🐱❓ \(projectName)",
+                        body: snapshot.reviewQuestion ?? snapshot.message
+                    )
                 }
             }
         )
@@ -537,6 +541,7 @@ struct CodexActivitySnapshot {
     var state: CatdexState
     var message: String
     var sessionPath: String?
+    var reviewQuestion: String?
 }
 
 final class CodexEventMonitor {
@@ -640,7 +645,9 @@ final class CodexEventMonitor {
         var state = CatdexState.waiting
         var message = "👀 Waiting for prompt"
         var pendingReviewCalls = Set<String>()
+        var pendingReviewQuestions: [String: String] = [:]
         var completedCalls = Set<String>()
+        var reviewQuestion: String?
 
         for line in content.split(separator: "\n") {
             guard let object = parseJSONObject(String(line)),
@@ -696,11 +703,16 @@ final class CodexEventMonitor {
                 let callID = payload["call_id"] as? String
                 let arguments = payload["arguments"] as? String ?? payload["input"] as? String ?? ""
                 if name == "request_user_input" || arguments.contains("\"sandbox_permissions\":\"require_escalated\"") || arguments.contains("require_escalated") {
+                    let question = extractReviewQuestion(toolName: name, arguments: arguments)
                     if let callID {
                         pendingReviewCalls.insert(callID)
+                        if let question {
+                            pendingReviewQuestions[callID] = question
+                        }
                     }
                     state = .review
                     message = "🐱❓ Confirmation required"
+                    reviewQuestion = question ?? reviewQuestion
                 } else {
                     state = .responding
                     message = "✍️ Running \(name)"
@@ -711,6 +723,7 @@ final class CodexEventMonitor {
                 if let callID = payload["call_id"] as? String {
                     completedCalls.insert(callID)
                     pendingReviewCalls.remove(callID)
+                    pendingReviewQuestions.removeValue(forKey: callID)
                 }
                 if state != .failed {
                     state = .responding
@@ -722,12 +735,63 @@ final class CodexEventMonitor {
             }
         }
 
-        if !pendingReviewCalls.subtracting(completedCalls).isEmpty {
+        let activeReviewCalls = pendingReviewCalls.subtracting(completedCalls)
+        if !activeReviewCalls.isEmpty {
             state = .review
             message = "🐱❓ Confirmation required"
+            reviewQuestion = activeReviewCalls.compactMap { pendingReviewQuestions[$0] }.last ?? reviewQuestion
         }
 
-        return CodexActivitySnapshot(state: state, message: message, sessionPath: url.path)
+        return CodexActivitySnapshot(
+            state: state,
+            message: message,
+            sessionPath: url.path,
+            reviewQuestion: state == .review ? reviewQuestion : nil
+        )
+    }
+
+    private func extractReviewQuestion(toolName: String, arguments: String) -> String? {
+        guard let object = parseJSONObject(arguments) else {
+            return nil
+        }
+
+        if toolName == "request_user_input",
+           let questions = object["questions"] as? [[String: Any]] {
+            for question in questions {
+                if let text = clippedNotificationText(normalized(question["question"] as? String)) {
+                    return text
+                }
+            }
+        }
+
+        if let justification = clippedNotificationText(normalized(object["justification"] as? String)) {
+            return justification
+        }
+
+        if let command = clippedNotificationText(normalized(object["cmd"] as? String)) {
+            return command
+        }
+
+        return nil
+    }
+
+    private func normalized(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let lines = value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        let normalized = lines.joined(separator: "\n")
+        return normalized.isEmpty ? nil : normalized
+    }
+
+    private func clippedNotificationText(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let maxLength = 220
+        guard value.count > maxLength else { return value }
+        let end = value.index(value.startIndex, offsetBy: maxLength)
+        return String(value[..<end]) + "..."
     }
 
     private func parseJSONObject(_ string: String) -> [String: Any]? {
