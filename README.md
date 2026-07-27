@@ -159,7 +159,7 @@ Use:
 
 - `Hourly Refresh`: turn the 1-hour automatic rescan on or off
 - `Refresh Usage`: rescan Codex session files for the selected range
-- `Set Usage Range...`: choose custom start and end dates
+- `Set Usage Range...`: choose a custom start date; the end date is always today
 - `Reset Usage Range (30 Days)`: return to the default 30-day range
 - `Set Sessions Folder...`: choose a custom Codex sessions folder
 - `Reset Sessions Folder`: use `$CODEX_HOME/sessions` when available, otherwise `~/.codex/sessions`
@@ -446,7 +446,7 @@ review > failed > stale > responding > starting/running > waiting
 
 - `Hourly Refresh`: 1시간 자동 재스캔 켜기/끄기
 - `Refresh Usage`: 선택한 기간의 Codex 세션 파일 다시 스캔
-- `Set Usage Range...`: 시작일과 종료일 직접 설정
+- `Set Usage Range...`: 시작일 직접 설정, 종료일은 항상 오늘
 - `Reset Usage Range (30 Days)`: 기본 30일 범위로 복구
 - `Set Sessions Folder...`: Codex sessions 폴더 직접 선택
 - `Reset Sessions Folder`: `$CODEX_HOME/sessions`가 있으면 사용하고, 없으면 `~/.codex/sessions` 사용

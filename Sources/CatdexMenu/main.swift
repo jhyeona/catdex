@@ -1268,7 +1268,7 @@ private struct PanelOrigin: Codable {
 
 private struct UsageDateRangeSetting: Codable {
     var startDate: String
-    var endDate: String
+    var endDate: String?
 }
 
 fileprivate struct UsageDateRange: Sendable {
@@ -1412,22 +1412,22 @@ final class IconSettingsStore {
     }
 
     fileprivate func tokenUsageRange(now: Date = Date(), calendar: Calendar = .current) -> UsageDateRange {
+        let today = calendar.startOfDay(for: now)
         if let setting = settings.tokenUsageRange,
-           let start = parseDay(setting.startDate),
-           let end = parseDay(setting.endDate) {
-            return makeUsageRange(start: start, end: end, calendar: calendar)
+           let start = parseDay(setting.startDate) {
+            return makeUsageRange(start: start, end: today, calendar: calendar)
         }
 
-        let today = calendar.startOfDay(for: now)
         let start = calendar.date(byAdding: .day, value: -29, to: today) ?? today
         return makeUsageRange(start: start, end: today, calendar: calendar)
     }
 
     func setTokenUsageRange(start: Date, end: Date, calendar: Calendar = .current) throws {
-        let range = makeUsageRange(start: start, end: end, calendar: calendar)
+        let today = calendar.startOfDay(for: Date())
+        let range = makeUsageRange(start: start, end: today, calendar: calendar)
         settings.tokenUsageRange = UsageDateRangeSetting(
             startDate: formatDay(range.startDay),
-            endDate: formatDay(range.endDay)
+            endDate: nil
         )
         try save()
     }
@@ -1541,6 +1541,8 @@ final class UsageRangeWindowController: NSWindowController {
 
         stack.addArrangedSubview(makeDateRow(title: "Start", picker: startPicker))
         stack.addArrangedSubview(makeDateRow(title: "End", picker: endPicker))
+        endPicker.isEnabled = false
+        endPicker.toolTip = "Always today"
         stack.addArrangedSubview(makeButtonRow())
 
         NSLayoutConstraint.activate([
