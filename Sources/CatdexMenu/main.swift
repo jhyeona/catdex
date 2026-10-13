@@ -5,7 +5,7 @@ import Foundation
 import UniformTypeIdentifiers
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let store: StatusStore
     private let iconStore: IconSettingsStore
@@ -52,6 +52,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.button?.font = NSFont.monospacedSystemFont(ofSize: 14, weight: .medium)
         if CommandLine.arguments.contains("--planner") { planner.show() }
         if CommandLine.arguments.contains("--quick-capture") { planner.showQuickAdd() }
+        let menu = NSMenu()
+        menu.delegate = self
+        statusItem.menu = menu
         refreshTokenUsage()
         updateUsageTimer()
         refresh()
@@ -60,6 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.refresh()
             }
         }
+        timer?.tolerance = 0.4
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -79,8 +83,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         loadedSessions = applySessionTaskOverrides(to: loadedSessions)
         sessions = loadedSessions
-        statusItem.button?.title = statusTitle(for: sessions)
-        statusItem.menu = makeMenu()
+        let title = statusTitle(for: sessions)
+        if statusItem.button?.title != title { statusItem.button?.title = title }
         floatingPanel.update(with: sessions)
         planner?.selectedProject = sessions.first?.workspace ?? ""
         planner?.refresh()
@@ -128,6 +132,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         return "🐱"
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        // Building the usage controls and all session submenus is only useful
+        // when the user opens the menu, not on every background heartbeat.
+        let updated = makeMenu()
+        menu.removeAllItems()
+        for item in updated.items {
+            updated.removeItem(item)
+            menu.addItem(item)
+        }
     }
 
     private func makeMenu() -> NSMenu {
@@ -238,13 +253,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func updateUsageDisplay(preservingOpenMenu: Bool) {
-        if preservingOpenMenu, let activeUsageView {
+        // The menu is now retained between openings. Refresh an existing usage
+        // view in place, including completion of an automatic background scan.
+        if let activeUsageView {
             activeUsageView.update(
                 snapshot: makeUsageSnapshot(),
                 hourlyRefreshEnabled: iconStore.hourlyTokenUsageRefreshEnabled()
             )
-        } else {
-            statusItem.menu = makeMenu()
         }
     }
 
@@ -392,7 +407,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleFloatingPanel() {
         floatingPanel.toggle()
-        statusItem.menu = makeMenu()
     }
 
     @objc private func openSettings() {
@@ -1666,6 +1680,8 @@ final class UsageRangeWindowController: NSWindowController {
 final class StateIconProvider {
     private let store: IconSettingsStore
     private var imageCache: [CatdexState: NSImage] = [:]
+    private var imageSignatures: [CatdexState: String] = [:]
+    private(set) var generation = 0
 
     init(store: IconSettingsStore) {
         self.store = store
@@ -1673,7 +1689,17 @@ final class StateIconProvider {
 
     func reload() {
         store.reload()
-        imageCache.removeAll()
+        var signatures: [CatdexState: String] = [:]
+        for state in CatdexState.allCases {
+            let path = store.path(for: state) ?? ""
+            let attributes = try? FileManager.default.attributesOfItem(atPath: path)
+            let modified = (attributes?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+            signatures[state] = "\(path)|\(store.emoji(for: state) ?? "")|\(modified)|\(attributes?[.size] as? Int ?? 0)"
+        }
+        guard signatures != imageSignatures else { return }
+        imageCache = imageCache.filter { signatures[$0.key] == imageSignatures[$0.key] }
+        imageSignatures = signatures
+        generation += 1
     }
 
     func path(for state: CatdexState) -> String? {
@@ -2057,6 +2083,7 @@ final class IconPreviewView: NSView {
 @MainActor
 final class FloatingPanelController: NSObject, NSWindowDelegate {
     private let panel: NSPanel
+    private let iconProvider: StateIconProvider
     private let gridView: SessionGridView
     private let container = NSView()
     private let tabs = NSSegmentedControl(labels: ["세션", "오늘"], trackingMode: .selectOne, target: nil, action: nil)
@@ -2079,6 +2106,7 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
     }
 
     init(iconProvider: StateIconProvider, settingsStore: IconSettingsStore) {
+        self.iconProvider = iconProvider
         gridView = SessionGridView(iconProvider: iconProvider)
         self.settingsStore = settingsStore
         panel = NSPanel(
@@ -2146,8 +2174,14 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
         todayView?.frame = gridView.frame
     }
 
+    private var renderedIconGeneration = -1
+    private var renderedTab = -1
+
     func update(with sessions: [CatdexSession]) {
+        guard latestSessions != sessions || renderedIconGeneration != iconProvider.generation || renderedTab != tabs.selectedSegment else { return }
         latestSessions = sessions
+        renderedIconGeneration = iconProvider.generation
+        renderedTab = tabs.selectedSegment
         gridView.sessions = sessions.filter { $0.state != .done }
         let gridSize = gridView.preferredSize
         let size = tabs.selectedSegment == 1 ? todaySize : NSSize(width: max(160, gridSize.width), height: gridSize.height + 32)
@@ -2166,7 +2200,7 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
         didPlacePanel = true
         layoutContent()
 
-        if isShown {
+        if isShown && !panel.isVisible {
             panel.orderFrontRegardless()
         }
     }
@@ -2190,8 +2224,10 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
     }
 
     private func setFramePreservingUserPlacement(_ frame: NSRect) {
+        let constrained = constrain(frame)
+        guard panel.frame != constrained else { return }
         isProgrammaticMove = true
-        panel.setFrame(constrain(frame), display: true)
+        panel.setFrame(constrained, display: true)
         isProgrammaticMove = false
     }
 
