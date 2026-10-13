@@ -156,7 +156,7 @@ public struct SessionContextReader {
              ("response_item", "custom_tool_call"):
             let name = payload["name"] as? String ?? "tool"
             let arguments = payload["arguments"] as? String ?? payload["input"] as? String
-            let isReview = name == "request_user_input" || (arguments?.contains("require_escalated") == true)
+            let isReview = CodexReviewRequestParser.parse(toolName: name, arguments: arguments ?? "") != nil
             return makeEvent(
                 timestamp: timestamp,
                 kind: isReview ? .review : .tool,

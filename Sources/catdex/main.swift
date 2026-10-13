@@ -402,17 +402,18 @@ final class SessionRunner {
     }
 
     private func startEventMonitor(pid: Int32) {
+        var notifications = CodexReviewNotificationTracker()
         let monitor = CodexEventMonitor(
             workspace: workspace,
             startedAt: Date(),
             onUpdate: { [weak self] snapshot in
                 guard let self else { return }
-                if let previousState = try? self.save(
+                if (try? self.save(
                     state: snapshot.state,
                     message: snapshot.message,
                     pid: pid,
                     codexSessionPath: snapshot.sessionPath
-                ), snapshot.state == .review, previousState != .review {
+                )) != nil, notifications.shouldNotify(snapshot) {
                     let projectName = URL(fileURLWithPath: self.workspace).lastPathComponent
                     self.sendNotification(
                         title: "🐱❓ \(projectName)",
@@ -537,13 +538,6 @@ final class SessionRunner {
     }
 }
 
-struct CodexActivitySnapshot {
-    var state: CatdexState
-    var message: String
-    var sessionPath: String?
-    var reviewQuestion: String?
-}
-
 final class CodexEventMonitor {
     private let workspace: String
     private let startedAt: Date
@@ -638,160 +632,8 @@ final class CodexEventMonitor {
     }
 
     private func inferActivity(from url: URL) -> CodexActivitySnapshot? {
-        guard let content = try? String(contentsOf: url, encoding: .utf8) else {
-            return nil
-        }
-
-        var state = CatdexState.waiting
-        var message = "👀 Waiting for prompt"
-        var pendingReviewCalls = Set<String>()
-        var pendingReviewQuestions: [String: String] = [:]
-        var completedCalls = Set<String>()
-        var reviewQuestion: String?
-
-        for line in content.split(separator: "\n") {
-            guard let object = parseJSONObject(String(line)),
-                  let type = object["type"] as? String,
-                  let payload = object["payload"] as? [String: Any],
-                  let payloadType = payload["type"] as? String
-            else {
-                continue
-            }
-
-            switch (type, payloadType) {
-            case ("event_msg", "task_started"),
-                 ("event_msg", "user_message"):
-                state = .responding
-                message = "✍️ Answering"
-
-            case ("event_msg", "agent_reasoning"),
-                 ("response_item", "reasoning"):
-                state = .responding
-                message = "✍️ Thinking"
-
-            case ("event_msg", "agent_message"):
-                if payload["phase"] as? String == "final_answer" {
-                    state = .waiting
-                    message = "👀 Answer complete; waiting"
-                } else {
-                    state = .responding
-                    message = "✍️ Updating progress"
-                }
-
-            case ("response_item", "message"):
-                let role = payload["role"] as? String
-                let phase = payload["phase"] as? String
-                if phase == "final_answer" {
-                    state = .waiting
-                    message = "👀 Answer complete; waiting"
-                } else if role == "assistant" {
-                    state = .responding
-                    message = "✍️ Updating progress"
-                }
-
-            case ("event_msg", "task_complete"):
-                state = .waiting
-                message = "👀 Answer complete; waiting"
-
-            case ("event_msg", "turn_aborted"):
-                state = .failed
-                message = "🙀 Turn aborted"
-
-            case ("response_item", "function_call"),
-                 ("response_item", "custom_tool_call"):
-                let name = payload["name"] as? String ?? "tool"
-                let callID = payload["call_id"] as? String
-                let arguments = payload["arguments"] as? String ?? payload["input"] as? String ?? ""
-                if name == "request_user_input" || arguments.contains("\"sandbox_permissions\":\"require_escalated\"") || arguments.contains("require_escalated") {
-                    let question = extractReviewQuestion(toolName: name, arguments: arguments)
-                    if let callID {
-                        pendingReviewCalls.insert(callID)
-                        if let question {
-                            pendingReviewQuestions[callID] = question
-                        }
-                    }
-                    state = .review
-                    message = "🐱❓ Confirmation required"
-                    reviewQuestion = question ?? reviewQuestion
-                } else {
-                    state = .responding
-                    message = "✍️ Running \(name)"
-                }
-
-            case ("response_item", "function_call_output"),
-                 ("response_item", "custom_tool_call_output"):
-                if let callID = payload["call_id"] as? String {
-                    completedCalls.insert(callID)
-                    pendingReviewCalls.remove(callID)
-                    pendingReviewQuestions.removeValue(forKey: callID)
-                }
-                if state != .failed {
-                    state = .responding
-                    message = "✍️ Processing tool result"
-                }
-
-            default:
-                continue
-            }
-        }
-
-        let activeReviewCalls = pendingReviewCalls.subtracting(completedCalls)
-        if !activeReviewCalls.isEmpty {
-            state = .review
-            message = "🐱❓ Confirmation required"
-            reviewQuestion = activeReviewCalls.compactMap { pendingReviewQuestions[$0] }.last ?? reviewQuestion
-        }
-
-        return CodexActivitySnapshot(
-            state: state,
-            message: message,
-            sessionPath: url.path,
-            reviewQuestion: state == .review ? reviewQuestion : nil
-        )
-    }
-
-    private func extractReviewQuestion(toolName: String, arguments: String) -> String? {
-        guard let object = parseJSONObject(arguments) else {
-            return nil
-        }
-
-        if toolName == "request_user_input",
-           let questions = object["questions"] as? [[String: Any]] {
-            for question in questions {
-                if let text = clippedNotificationText(normalized(question["question"] as? String)) {
-                    return text
-                }
-            }
-        }
-
-        if let justification = clippedNotificationText(normalized(object["justification"] as? String)) {
-            return justification
-        }
-
-        if let command = clippedNotificationText(normalized(object["cmd"] as? String)) {
-            return command
-        }
-
-        return nil
-    }
-
-    private func normalized(_ value: String?) -> String? {
-        guard let value else { return nil }
-        let lines = value
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        let normalized = lines.joined(separator: "\n")
-        return normalized.isEmpty ? nil : normalized
-    }
-
-    private func clippedNotificationText(_ value: String?) -> String? {
-        guard let value else { return nil }
-        let maxLength = 220
-        guard value.count > maxLength else { return value }
-        let end = value.index(value.startIndex, offsetBy: maxLength)
-        return String(value[..<end]) + "..."
+        guard let content = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        return CodexActivityReader.read(content, sessionPath: url.path)
     }
 
     private func parseJSONObject(_ string: String) -> [String: Any]? {

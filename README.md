@@ -27,7 +27,7 @@ Catdex gives you a small ambient dashboard for local Codex work:
 - menu bar status at a glance
 - always-on-top floating panel across macOS Spaces
 - one compact cell per Codex session
-- `review` notifications when approval or input is needed
+- `review` notifications for unanswered blocking input requests
 - custom status icons with emoji or image files
 - automatic stale detection when heartbeat updates stop
 
@@ -110,7 +110,7 @@ catdex --codex-bin /path/to/codex "check this branch"
 | `starting` | Catdex created a session and is starting Codex or finding its session file |
 | `responding` | Codex is thinking, answering, running tools, or processing tool results |
 | `waiting` | Codex finished an answer and is waiting for the next prompt |
-| `review` | Codex needs confirmation, approval, or user input |
+| `review` | Codex has an unanswered blocking user-input request |
 | `done` | Codex exited successfully |
 | `failed` | Codex exited with an error, signal, or aborted turn |
 | `stale` | Heartbeat was lost or the process disappeared |
@@ -202,7 +202,11 @@ Emoji settings take priority over image settings. If an image cannot be loaded, 
 
 ## Notifications
 
-Catdex sends a macOS notification when a session enters `review`:
+Catdex sends one macOS notification per unanswered blocking `request_user_input` call. Answered questions, completed or aborted turns, and nonblocking questions do not trigger review alerts.
+
+A command with `sandbox_permissions: "require_escalated"` can already be allowed by an approval rule. This option alone never triggers an alert. The monitored session log does not expose whether the runtime actually shows a command approval prompt, so command approval alerts are not inferred from tool arguments; those prompts remain in Codex.
+
+Example:
 
 ```text
 🐱❓ Codex needs review
@@ -313,7 +317,7 @@ It was active, but heartbeat updates stopped for long enough that Catdex could n
 
 **Why do I only get notifications for `review`?**
 
-Completion notifications are noisy. Catdex only notifies when Codex likely needs a human decision.
+Completion notifications are noisy. Review alerts are limited to explicit blocking input requests; tool permission options alone are not evidence that a person needs to act.
 
 ## Roadmap Ideas
 
@@ -404,7 +408,7 @@ Catdex는 현재 프로젝트 폴더명을 초기 표시명으로 사용합니�
 | `starting` | Catdex 세션 생성, Codex 시작 또는 세션 파일 탐색 중 |
 | `responding` | Codex가 답변 생성, 추론, 도구 실행/결과 처리 중 |
 | `waiting` | 답변 완료 후 다음 프롬프트 대기 |
-| `review` | 권한 승인, 명령 확인, 사용자 입력 등 컨펌 필요 |
+| `review` | 응답을 기다리는 명시적인 사용자 질문이 있음 |
 | `done` | Codex 정상 종료 |
 | `failed` | 비정상 종료, 시그널, turn abort |
 | `stale` | heartbeat가 끊겼거나 프로세스가 사라짐 |
@@ -487,7 +491,11 @@ png, jpg, gif, tiff, bmp, icns, pdf, svg
 
 ## 알림
 
-세션이 `review` 상태로 바뀌면 macOS 알림을 보냅니다.
+응답을 기다리는 명시적인 `request_user_input` 질문마다 한 번만 알림을 보냅니다. 답변한 질문, 완료·중단된 작업, 응답을 기다리지 않는 비동기 질문에는 확인 알림을 보내지 않습니다.
+
+`require_escalated` 옵션이 있는 명령도 기존 승인 규칙에 따라 자동 실행될 수 있으므로, 이 옵션만으로 확인 알림을 보내지 않습니다. 현재 읽는 세션 로그에는 실제 명령 승인창의 대기 여부가 없으므로 명령 승인 알림을 추측해서 보내지 않으며, 해당 승인창은 Codex에서 확인합니다.
+
+업데이트 전에 실행한 CLI 세션은 이전 알림 로직을 계속 사용합니다. 새 로직은 `catdex`를 다시 실행한 세션부터 적용됩니다.
 
 ```text
 🐱❓ Codex needs review

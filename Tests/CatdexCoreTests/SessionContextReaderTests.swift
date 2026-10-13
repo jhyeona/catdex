@@ -2,6 +2,21 @@ import XCTest
 @testable import CatdexCore
 
 final class SessionContextReaderTests: XCTestCase {
+    func testElevatedCommandIsNotLabeledAsUserConfirmation() throws {
+        let jsonl = try makeJSONL([
+            #"{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"swift test\",\"sandbox_permissions\":\"require_escalated\"}"}}"#,
+            #"{"type":"response_item","payload":{"type":"function_call","name":"functions.request_user_input","arguments":"{\"questions\":[{\"question\":\"진행할까요?\"}]}"}}"#
+        ])
+        defer { try? FileManager.default.removeItem(at: jsonl) }
+        let session = CatdexSession(
+            id: "test", state: .responding, task: "Test", workspace: "/tmp/project",
+            updatedAt: Date(), lastMessage: "Running", codexSessionPath: jsonl.path
+        )
+        let context = SessionContextReader().readContext(for: session)
+        XCTAssertEqual(context.recentEvents.map(\.kind), [.tool, .review])
+        XCTAssertEqual(context.recentEvents.map(\.title), ["Tool call: exec_command", "Review required"])
+    }
+
     func testReadContextExtractsRecentReadableEvents() throws {
         let jsonl = try makeJSONL([
             #"{"timestamp":"2026-06-10T00:00:00Z","type":"session_meta","payload":{"cwd":"/tmp/project","base_instructions":{"text":"do not show this"}}}"#,
