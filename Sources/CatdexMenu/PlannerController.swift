@@ -34,17 +34,25 @@ final class PlannerModel: ObservableObject {
         catch { self.error = error.localizedDescription; reload(); return false }
     }
     var todayTasks: [PlannerTask] {
-        snapshot.tasks.filter { PlannerScheduler.isToday($0, day: Date()) }.sorted {
-            if $0.pinned != $1.pinned { return $0.pinned }
-            if $0.order != $1.order { return $0.order < $1.order }
-            return $0.createdAt < $1.createdAt
-        }
+        snapshot.tasks.filter { PlannerScheduler.isToday($0, day: Date()) }.sorted(by: PlannerTask.precedes)
     }
     var projects: [String] { Array(Set(snapshot.records.map(\.project).filter { !$0.isEmpty })).sorted() }
     func update(_ task: PlannerTask, _ edit: (inout PlannerTask) -> Void) {
         var value = task; edit(&value); perform { try store.saveTask(value) }
     }
     func complete(_ task: PlannerTask) { update(task) { $0.state = $0.state == .done ? .todo : .done } }
+    @discardableResult
+    func moveTask(_ id: String, relativeTo targetID: String?, after: Bool = false, toDay day: Date? = nil) -> Bool {
+        guard let task = snapshot.tasks.first(where: { $0.id == id }), id != targetID else { return false }
+        let target = targetID.flatMap { id in snapshot.tasks.first { $0.id == id } }
+        guard targetID == nil || target != nil else { return false }
+        return perform { try store.moveTask(task, relativeTo: target, after: after, toDay: day) }
+    }
+    func moveTask(_ task: PlannerTask, step: Int, in visibleTasks: [PlannerTask]) {
+        guard let index = visibleTasks.firstIndex(where: { $0.id == task.id }),
+              visibleTasks.indices.contains(index + step) else { return }
+        moveTask(task.id, relativeTo: visibleTasks[index + step].id, after: step > 0)
+    }
     func tomorrow(_ task: PlannerTask) {
         update(task) {
             let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: Date()))

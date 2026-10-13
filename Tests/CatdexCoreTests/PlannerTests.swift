@@ -43,6 +43,73 @@ final class PlannerTests: XCTestCase {
         XCTAssertThrowsError(try store.addTask(title: "기존 메모", day: date(), requestID: pending.id, calendar: calendar))
         XCTAssertFalse(try store.snapshot().records[0].resolved)
     }
+    func testReorderPersistsBothDirectionsAndNewTasksAppend() throws {
+        let store = try store()
+        let a = try store.addTask(title: "A", day: date())
+        let b = try store.addTask(title: "B", day: date())
+        let c = try store.addTask(title: "C", day: date())
+        try store.moveTask(c, relativeTo: a)
+        let reopened = PlannerStore(paths: CatdexPaths(root: store.url.deletingLastPathComponent()))
+        var tasks = try reopened.snapshot().tasks.sorted(by: PlannerTask.precedes)
+        XCTAssertEqual(tasks.map(\.title), ["C", "A", "B"])
+        try reopened.moveTask(tasks[0], relativeTo: tasks[2], after: true)
+        tasks = try reopened.snapshot().tasks.sorted(by: PlannerTask.precedes)
+        XCTAssertEqual(tasks.map(\.id), [a.id, b.id, c.id])
+        _ = try reopened.addTask(title: "D", day: date())
+        let record = try reopened.capture(CaptureRequest(text: "기록", candidates: [TaskCandidate(title: "E"), TaskCandidate(title: "F")]))
+        try reopened.resolve(record: record, selected: record.candidates)
+        XCTAssertEqual(try reopened.snapshot().tasks.sorted(by: PlannerTask.precedes).map(\.title), ["A", "B", "C", "D", "E", "F"])
+    }
+    func testFilteredReorderPreservesHiddenTasksAndTaskDetails() throws {
+        let store = try store()
+        let a = try store.addTask(title: "A", day: date(), project: "visible")
+        _ = try store.addTask(title: "숨긴 작업", day: date(7), project: "hidden")
+        var c = try store.addTask(title: "C", day: date(), project: "visible")
+        c.note = "유지할 메모"; c.pinned = true; c.state = .inProgress
+        try store.saveTask(c)
+        c = try XCTUnwrap(store.snapshot().tasks.first { $0.id == c.id })
+        try store.moveTask(c, relativeTo: a)
+        let tasks = try store.snapshot().tasks.sorted(by: PlannerTask.precedes)
+        XCTAssertEqual(tasks.map(\.title), ["C", "A", "숨긴 작업"])
+        XCTAssertEqual(tasks[0].note, c.note)
+        XCTAssertEqual(tasks[0].state, .inProgress)
+        XCTAssertTrue(tasks[0].pinned)
+        XCTAssertEqual(tasks[2].plannedDay, calendar.startOfDay(for: date(7)))
+    }
+    func testStaleReorderIsAtomicAndCannotOverwriteAnotherEdit() throws {
+        let store = try store()
+        let a = try store.addTask(title: "A", day: date())
+        var b = try store.addTask(title: "B", day: date())
+        let oldB = b
+        b.title = "다른 창에서 수정"; try store.saveTask(b)
+        let before = try store.snapshot()
+        XCTAssertThrowsError(try store.moveTask(oldB, relativeTo: a))
+        XCTAssertThrowsError(try store.moveTask(a, relativeTo: oldB, after: true))
+        XCTAssertEqual(try store.snapshot(), before)
+    }
+    func testReorderingKeepsTimesAndMovingToAnotherDayClearsOldTime() throws {
+        let store = try store()
+        let a = try store.addTask(title: "A", day: date())
+        let b = try store.addTask(title: "B", day: date())
+        let block = PlannerBlock(taskID: b.id, title: b.title, start: date(6, 14), end: date(6, 15))
+        try store.addBlocks([block])
+        var current = try XCTUnwrap(store.snapshot().tasks.first { $0.id == b.id })
+        try store.moveTask(current, relativeTo: a, toDay: date(), calendar: calendar)
+        XCTAssertEqual(try store.snapshot().blocks, [block])
+        current = try XCTUnwrap(store.snapshot().tasks.first { $0.id == b.id })
+        try store.moveTask(current, relativeTo: nil, toDay: date(7), calendar: calendar)
+        let snapshot = try store.snapshot()
+        XCTAssertTrue(snapshot.blocks.isEmpty)
+        XCTAssertEqual(snapshot.tasks.first { $0.id == b.id }?.plannedDay, calendar.startOfDay(for: date(7)))
+        XCTAssertEqual(snapshot.tasks.sorted(by: PlannerTask.precedes).map(\.title), ["A", "B"])
+    }
+    func testDroppingOntoSelfDoesNotChangeRevisionOrSchedule() throws {
+        let store = try store()
+        let task = try store.addTask(title: "A", day: date())
+        let before = try store.snapshot()
+        try store.moveTask(task, relativeTo: task)
+        XCTAssertEqual(try store.snapshot(), before)
+    }
     func testCaptureIsIdempotentAndOriginalSurvivesResolutionAndSessionCleanup() throws {
         let store = try store()
         let input = CaptureRequest(requestID: "same", text: "/기록 내일 오전 로그인 버그 확인 40분 예상", project: "/tmp/a", sessionID: "thread", context: "재현: 만료 후 갱신")

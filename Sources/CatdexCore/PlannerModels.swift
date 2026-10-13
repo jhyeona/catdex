@@ -98,6 +98,13 @@ public struct PlannerTask: Codable, Identifiable, Equatable, Sendable {
     public var checklist: [ChecklistItem] = []
     public var completedAt: Date?
     public var note = ""
+    /// Manual order is shared by the weekly board and task lists. IDs break ties
+    /// for captures that created several tasks at exactly the same time.
+    public static func precedes(_ lhs: PlannerTask, _ rhs: PlannerTask) -> Bool {
+        if lhs.order != rhs.order { return lhs.order < rhs.order }
+        if lhs.createdAt != rhs.createdAt { return lhs.createdAt < rhs.createdAt }
+        return lhs.id < rhs.id
+    }
     public init(candidate: TaskCandidate, record: PlannerRecord) {
         id = record.id + ":" + candidate.id; recordID = record.id; title = candidate.title
         project = record.project; createdAt = record.createdAt; dueAt = candidate.dueAt

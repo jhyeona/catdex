@@ -137,7 +137,9 @@ public final class PlannerStore {
             }
             var record = PlannerRecord(id: requestID, text: title, project: project, context: "", createdAt: Date(), candidates: [candidate])
             record.resolved = true
-            let task = PlannerTask(candidate: candidate, record: record)
+            var task = PlannerTask(candidate: candidate, record: record)
+            let existingTasks: [PlannerTask] = try rows(db, kind: "task")
+            task.order = (existingTasks.map(\.order).max() ?? -1) + 1
             try put(db, kind: "record", id: record.id, value: record)
             try put(db, kind: "task", id: task.id, value: task)
             return task
@@ -162,9 +164,12 @@ public final class PlannerStore {
             guard var current = records.first(where: { $0.id == record.id }), current.revision == record.revision,
                   !current.resolved else { throw PlannerError.conflict }
             guard Set(selected.map(\.id)).count == selected.count else { throw PlannerError.invalid("중복 후보입니다.") }
-            for candidate in selected {
+            let existingTasks: [PlannerTask] = try rows(db, kind: "task")
+            let firstOrder = (existingTasks.map(\.order).max() ?? -1) + 1
+            for (index, candidate) in selected.enumerated() {
                 try Self.validate(candidate)
-                let task = PlannerTask(candidate: candidate, record: current)
+                var task = PlannerTask(candidate: candidate, record: current)
+                task.order = firstOrder + Double(index)
                 try put(db, kind: "task", id: task.id, value: task)
             }
             current.resolved = true; current.revision += 1
@@ -193,6 +198,46 @@ public final class PlannerStore {
                 } else if current.title != updated.title {
                     block.title = updated.title
                     try put(db, kind: "block", id: block.id, value: block)
+                }
+            }
+        } }
+    }
+    /// Reposition against the current database in one transaction, preserving
+    /// hidden tasks and unrelated edits. Nil target means the end of the list.
+    public func moveTask(_ task: PlannerTask, relativeTo target: PlannerTask?, after: Bool = false,
+                         toDay day: Date? = nil, calendar: Calendar = .current) throws {
+        guard target?.id != task.id else { return }
+        try connection { db in try transaction(db) {
+            let tasks: [PlannerTask] = try rows(db, kind: "task")
+            guard let current = tasks.first(where: { $0.id == task.id }), current.revision == task.revision else {
+                throw PlannerError.conflict
+            }
+            if let target {
+                guard tasks.contains(where: { $0.id == target.id && $0.revision == target.revision }) else {
+                    throw PlannerError.conflict
+                }
+            }
+            var ordered = tasks.sorted(by: PlannerTask.precedes).filter { $0.id != task.id }
+            let insertion = target.flatMap { target in ordered.firstIndex { $0.id == target.id } }
+                .map { $0 + (after ? 1 : 0) } ?? ordered.count
+            var moved = current
+            if let day { moved.plannedDay = calendar.startOfDay(for: day) }
+            ordered.insert(moved, at: insertion)
+            let originals = Dictionary(uniqueKeysWithValues: tasks.map { ($0.id, $0) })
+            for (index, var value) in ordered.enumerated() {
+                value.order = Double(index)
+                if value != originals[value.id] {
+                    value.revision += 1
+                    try put(db, kind: "task", id: value.id, value: value)
+                }
+            }
+            // A date move has the same scheduling semantics as editing the date.
+            // Reordering within a day never changes any scheduled times.
+            if current.plannedDay != moved.plannedDay {
+                let blocks: [PlannerBlock] = try rows(db, kind: "block")
+                for block in blocks where block.taskID == task.id &&
+                    !(moved.plannedDay.map { calendar.isDate($0, inSameDayAs: block.start) } ?? false) {
+                    try remove(db, kind: "block", id: block.id)
                 }
             }
         } }

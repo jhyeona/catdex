@@ -112,11 +112,7 @@ struct PlannerRootView: View {
             let record = model.snapshot.records.first { $0.id == task.recordID }
             return scope && (model.projectFilter.isEmpty || task.project == model.projectFilter) &&
                 (model.search.isEmpty || [task.title, task.pauseNote, task.note, record?.text ?? ""].joined(separator: " ").localizedCaseInsensitiveContains(model.search))
-        }.sorted {
-            if $0.pinned != $1.pinned { return $0.pinned }
-            if $0.order != $1.order { return $0.order < $1.order }
-            return $0.createdAt < $1.createdAt
-        }
+        }.sorted(by: PlannerTask.precedes)
     }
     private var itemList: some View {
         ScrollView {
@@ -140,6 +136,7 @@ struct PlannerRootView: View {
                     if model.snapshot.records.isEmpty { Text("개발하다 떠오른 일을 기록해 보세요.").padding(.top, 20).foregroundStyle(.secondary) }
                 } else {
                     Text("\(filteredTasks.count)개 할 일").font(.caption).foregroundStyle(.secondary)
+                    Text("드래그하거나 ↑↓로 순서 변경").font(.caption2).foregroundStyle(.secondary)
                     ForEach(filteredTasks) { task in
                         HStack(alignment: .top, spacing: 8) {
                             Button { model.complete(task) } label: { Image(systemName: task.state == .done ? "checkmark.circle.fill" : "circle") }.buttonStyle(.plain)
@@ -154,19 +151,102 @@ struct PlannerRootView: View {
                                 .accessibilityElement(children: .combine)
                                 .accessibilityAddTraits(.isButton)
                                 .accessibilityAction { openTask(task) }
+                            PlannerOrderButtons(model: model, task: task, tasks: filteredTasks, vertical: true)
                         }.padding(12).background(Color.accentColor.opacity(model.selectedTaskID == task.id ? 0.13 : 0.04)).cornerRadius(8)
                             .onDrag { NSItemProvider(object: task.id as NSString) }
+                            .modifier(PlannerTaskDropTarget(model: model, targetID: task.id))
                             .contextMenu {
                                 Button("오늘 하기") { model.update(task) { $0.plannedDay = Date() } }
                                 Button("내일 하기") { model.tomorrow(task) }
                                 Button(task.pinned ? "핵심 고정 해제" : "핵심 3개에 고정") { model.update(task) { $0.pinned.toggle() } }
-                                Button("목록 맨 위로") { model.update(task) { $0.order = (model.snapshot.tasks.map(\.order).min() ?? 0) - 1 } }
+                                Button("목록 맨 위로") { model.moveTask(task.id, relativeTo: filteredTasks.first?.id) }
                             }
+                    }
+                    if !filteredTasks.isEmpty {
+                        Text("맨 아래로 이동").font(.caption).foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity).padding(.vertical, 12)
+                            .modifier(PlannerTaskDropTarget(model: model, targetID: filteredTasks.last?.id, alwaysAfter: true))
                     }
                     if filteredTasks.isEmpty { Text("이 목록에 할 일이 없습니다.").padding(.top, 20).foregroundStyle(.secondary) }
                 }
             }.padding(12)
         }
+    }
+}
+
+/// Visible controls keep reordering discoverable and usable without dragging.
+struct PlannerOrderButtons: View {
+    @ObservedObject var model: PlannerModel
+    let task: PlannerTask
+    let tasks: [PlannerTask]
+    var vertical = false
+    var body: some View {
+        let layout = vertical ? AnyLayout(VStackLayout(spacing: 4)) : AnyLayout(HStackLayout(spacing: 6))
+        layout {
+            if !vertical { Text("순서").font(.caption2).foregroundStyle(.secondary) }
+            moveButton(-1, symbol: "arrow.up", title: "위로 이동")
+            moveButton(1, symbol: "arrow.down", title: "아래로 이동")
+        }.controlSize(.small)
+    }
+    private func moveButton(_ step: Int, symbol: String, title: String) -> some View {
+        Button { model.moveTask(task, step: step, in: tasks) } label: {
+            Image(systemName: symbol).font(.caption).frame(width: 16, height: 16)
+        }.buttonStyle(.bordered)
+            .disabled(step < 0 ? tasks.first?.id == task.id : tasks.last?.id == task.id)
+            .help(title).accessibilityLabel("\(task.title) \(title)")
+    }
+}
+
+struct PlannerTaskDropTarget: ViewModifier {
+    @ObservedObject var model: PlannerModel
+    var targetID: String?
+    var day: Date?
+    var alwaysAfter = false
+    @State private var height: CGFloat = 60
+    @State private var dropAfter: Bool?
+    func body(content: Content) -> some View {
+        content
+            .background(GeometryReader { geometry in
+                Color.clear.onAppear { height = geometry.size.height }
+                    .onChange(of: geometry.size.height) { height = $0 }
+            })
+            .overlay(alignment: dropAfter == true ? .bottom : .top) {
+                if dropAfter != nil {
+                    RoundedRectangle(cornerRadius: 2).fill(Color.accentColor).frame(height: 3)
+                        .allowsHitTesting(false)
+                }
+            }
+            .onDrop(of: [.text], delegate: PlannerTaskDropDelegate(
+                model: model, targetID: targetID, day: day, height: height,
+                alwaysAfter: alwaysAfter, dropAfter: $dropAfter
+            ))
+    }
+}
+
+struct PlannerTaskDropDelegate: DropDelegate {
+    let model: PlannerModel
+    let targetID: String?
+    let day: Date?
+    let height: CGFloat
+    let alwaysAfter: Bool
+    @Binding var dropAfter: Bool?
+    func validateDrop(info: DropInfo) -> Bool { info.hasItemsConforming(to: [.text]) }
+    func dropEntered(info: DropInfo) { dropAfter = alwaysAfter || info.location.y > height / 2 }
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        dropAfter = alwaysAfter || info.location.y > height / 2
+        return DropProposal(operation: .move)
+    }
+    func dropExited(info: DropInfo) { dropAfter = nil }
+    func performDrop(info: DropInfo) -> Bool {
+        let after = alwaysAfter || info.location.y > height / 2
+        dropAfter = nil
+        guard let provider = info.itemProviders(for: [.text]).first,
+              provider.canLoadObject(ofClass: String.self) else { return false }
+        _ = provider.loadObject(ofClass: String.self) { value, _ in
+            guard let value else { return }
+            Task { @MainActor in model.moveTask(value, relativeTo: targetID, after: after, toDay: day) }
+        }
+        return true
     }
 }
 
@@ -434,7 +514,7 @@ struct PlannerTimelineView: View {
                 Button("이번 주") { model.day = Date() }
             }
             HStack {
-                Text("할 일을 추가하고, 끝나면 체크하세요.").font(.caption).foregroundStyle(.secondary)
+                Text("완료는 체크 · 순서는 드래그 또는 ↑↓").font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Menu("일정 도구") {
                     Toggle("시간표 보기", isOn: $showHours)
@@ -502,7 +582,7 @@ struct PlannerTimelineView: View {
             (model.search.isEmpty || (task.title + " " + task.note).localizedCaseInsensitiveContains(model.search)) &&
             ((task.plannedDay.map { Calendar.current.isDate($0, inSameDayAs: day) } ?? false) ||
              blocks.contains { $0.taskID == task.id && $0.start < end && $0.end > day })
-        }.sorted { $0.order == $1.order ? $0.createdAt < $1.createdAt : $0.order < $1.order }
+        }.sorted(by: PlannerTask.precedes)
     }
     private func weekBoard(width: CGFloat) -> some View {
         HStack(alignment: .top, spacing: 0) {
@@ -510,20 +590,24 @@ struct PlannerTimelineView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 8) {
                         ForEach(dayTasks(day)) { task in
-                            HStack(alignment: .top, spacing: 6) {
-                                Button { model.complete(task) } label: { Image(systemName: "circle").font(.body) }
-                                    .buttonStyle(.plain).help("완료").accessibilityLabel("\(task.title) 완료")
-                                VStack(alignment: .leading, spacing: 5) {
-                                    Text(task.title).font(.callout).multilineTextAlignment(.leading)
-                                    if let block = blocks.first(where: { $0.taskID == task.id && Calendar.current.isDate($0.start, inSameDayAs: day) }) {
-                                        Text(timeLabel(block.start)).font(.caption).foregroundStyle(.secondary)
-                                    }
-                                }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-                                    .onTapGesture { editingTask = task }
-                                    .accessibilityElement(children: .combine).accessibilityAddTraits(.isButton)
-                                    .accessibilityAction { editingTask = task }
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack(alignment: .top, spacing: 6) {
+                                    Button { model.complete(task) } label: { Image(systemName: "circle").font(.body) }
+                                        .buttonStyle(.plain).help("완료").accessibilityLabel("\(task.title) 완료")
+                                    VStack(alignment: .leading, spacing: 5) {
+                                        Text(task.title).font(.callout).multilineTextAlignment(.leading)
+                                        if let block = blocks.first(where: { $0.taskID == task.id && Calendar.current.isDate($0.start, inSameDayAs: day) }) {
+                                            Text(timeLabel(block.start)).font(.caption).foregroundStyle(.secondary)
+                                        }
+                                    }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                                        .onTapGesture { editingTask = task }
+                                        .accessibilityElement(children: .combine).accessibilityAddTraits(.isButton)
+                                        .accessibilityAction { editingTask = task }
+                                }
+                                HStack { Spacer(minLength: 0); PlannerOrderButtons(model: model, task: task, tasks: dayTasks(day)) }
                             }.padding(10).background(Color(nsColor: .controlBackgroundColor)).cornerRadius(8)
                                 .onDrag { NSItemProvider(object: task.id as NSString) }
+                                .modifier(PlannerTaskDropTarget(model: model, targetID: task.id, day: day))
                         }
                         ForEach(blocks.filter { $0.taskID == nil && $0.start < Calendar.current.date(byAdding: .day, value: 1, to: day)! && $0.end > day }) { block in
                             Button { editingBlock = block } label: {
@@ -542,17 +626,7 @@ struct PlannerTimelineView: View {
                 }.frame(width: width).frame(maxHeight: .infinity)
                     .background(Calendar.current.isDateInToday(day) ? Color.accentColor.opacity(0.04) : Color.secondary.opacity(0.025))
                     .overlay(alignment: .leading) { Rectangle().fill(Color.secondary.opacity(0.12)).frame(width: 0.5) }
-                    .onDrop(of: [.text], isTargeted: nil) { providers in
-                        guard let provider = providers.first, provider.canLoadObject(ofClass: String.self) else { return false }
-                        _ = provider.loadObject(ofClass: String.self) { value, _ in
-                            guard let value else { return }
-                            Task { @MainActor in
-                                guard let task = model.snapshot.tasks.first(where: { $0.id == value }) else { return }
-                                model.update(task) { $0.plannedDay = day }
-                            }
-                        }
-                        return true
-                    }
+                    .modifier(PlannerTaskDropTarget(model: model, targetID: dayTasks(day).last?.id, day: day, alwaysAfter: true))
             }
         }
     }
