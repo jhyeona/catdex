@@ -80,39 +80,37 @@ public struct TokenUsageReader {
         var latestContextWindow: Int?
         var latestContextWindowTimestamp: Date?
 
+        let fractionalFormat = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
+        let format = Date.ISO8601FormatStyle()
+
         for url in uniqueFiles(files) {
             guard !Task.isCancelled else { break }
-            guard FileManager.default.fileExists(atPath: url.path),
-                  let content = try? String(contentsOf: url, encoding: .utf8)
-            else {
-                continue
-            }
-
             var lastTotalTokens: Int?
             var sessionHasUsage = false
-            for line in content.split(separator: "\n") {
-                guard !Task.isCancelled else { break }
-                guard let event = parseTokenEvent(String(line)) else {
-                    continue
-                }
+            forEachLine(in: url) { line in
+                autoreleasepool {
+                    guard let event = parseTokenEvent(line, fractionalFormat: fractionalFormat, format: format) else {
+                        return
+                    }
 
-                let isRepeatedTotal = lastTotalTokens == event.totalUsage.totalTokens
-                lastTotalTokens = event.totalUsage.totalTokens
+                    let isRepeatedTotal = lastTotalTokens == event.totalUsage.totalTokens
+                    lastTotalTokens = event.totalUsage.totalTokens
 
-                guard event.timestamp >= range.start,
-                      event.timestamp < range.end,
-                      !isRepeatedTotal
-                else {
-                    continue
-                }
+                    guard event.timestamp >= range.start,
+                          event.timestamp < range.end,
+                          !isRepeatedTotal
+                    else {
+                        return
+                    }
 
-                totals.add(event.lastUsage)
-                eventCount += 1
-                sessionHasUsage = true
-                if let contextWindow = event.contextWindow,
-                   latestContextWindowTimestamp.map({ event.timestamp >= $0 }) ?? true {
-                    latestContextWindow = contextWindow
-                    latestContextWindowTimestamp = event.timestamp
+                    totals.add(event.lastUsage)
+                    eventCount += 1
+                    sessionHasUsage = true
+                    if let contextWindow = event.contextWindow,
+                       latestContextWindowTimestamp.map({ event.timestamp >= $0 }) ?? true {
+                        latestContextWindow = contextWindow
+                        latestContextWindowTimestamp = event.timestamp
+                    }
                 }
             }
 
@@ -171,12 +169,17 @@ public struct TokenUsageReader {
         return urls
     }
 
-    private func parseTokenEvent(_ line: String) -> TokenUsageEvent? {
-        guard let object = parseJSONObject(line),
+    private func parseTokenEvent(_ line: Data, fractionalFormat: Date.ISO8601FormatStyle,
+                                 format: Date.ISO8601FormatStyle) -> TokenUsageEvent? {
+        // Most rollout lines contain conversation/tool output, not usage. Unicode
+        // escapes take the full parser path so escaped JSON keys/types still work.
+        guard line.range(of: Self.tokenMarker) != nil || line.range(of: Self.escapeMarker) != nil,
+              let object = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any],
               object["type"] as? String == "event_msg",
-              let timestamp = parseDate(object["timestamp"] as? String),
               let payload = object["payload"] as? [String: Any],
               payload["type"] as? String == "token_count",
+              let timestampString = object["timestamp"] as? String,
+              let timestamp = (try? fractionalFormat.parse(timestampString)) ?? (try? format.parse(timestampString)),
               let info = payload["info"] as? [String: Any],
               let totalUsageObject = info["total_token_usage"] as? [String: Any],
               let lastUsageObject = info["last_token_usage"] as? [String: Any]
@@ -202,26 +205,43 @@ public struct TokenUsageReader {
         )
     }
 
-    private func parseJSONObject(_ string: String) -> [String: Any]? {
-        guard let data = string.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else {
-            return nil
-        }
-        return object
-    }
+    private static let tokenMarker = Data("token_count".utf8)
+    private static let escapeMarker = Data("\\u".utf8)
 
-    private func parseDate(_ string: String?) -> Date? {
-        guard let string else { return nil }
-        let fractionalFormatter = ISO8601DateFormatter()
-        fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = fractionalFormatter.date(from: string) {
-            return date
+    /// Read a fixed-size chunk at a time instead of retaining the entire rollout
+    /// and an array of all of its lines. A line may span any number of chunks.
+    private func forEachLine(in url: URL, visit: (Data) -> Void) {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return }
+        defer { try? handle.close() }
+        var pending = Data()
+        while !Task.isCancelled {
+            // FileHandle and Data bridging can also create autoreleased objects.
+            // Drain those per chunk, not only the JSON objects per event.
+            let more = autoreleasepool { () -> Bool in
+                let chunk: Data
+                do { chunk = try handle.read(upToCount: 64 * 1024) ?? Data() }
+                catch { return false }
+                if chunk.isEmpty {
+                    if !pending.isEmpty { visit(pending) }
+                    return false
+                }
+                var start = chunk.startIndex
+                for newline in chunk.indices where chunk[newline] == 0x0A {
+                    guard !Task.isCancelled else { return false }
+                    if pending.isEmpty {
+                        visit(chunk.subdata(in: start..<newline))
+                    } else {
+                        pending.append(contentsOf: chunk[start..<newline])
+                        visit(pending)
+                        pending.removeAll(keepingCapacity: false)
+                    }
+                    start = newline + 1
+                }
+                pending.append(contentsOf: chunk[start..<chunk.endIndex])
+                return true
+            }
+            if !more { return }
         }
-
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter.date(from: string)
     }
 }
 

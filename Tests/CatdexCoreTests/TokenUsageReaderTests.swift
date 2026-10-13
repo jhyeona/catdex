@@ -159,6 +159,60 @@ final class TokenUsageReaderTests: XCTestCase {
         XCTAssertEqual(summary.eventCount, 1)
     }
 
+    func testStreamingHandlesLongUnicodeLinesCRLFAndFinalLineWithoutNewline() throws {
+        let event = tokenLine(timestamp: "2026-06-01T00:00:01.123Z",
+                              total: (100, 10, 20, 5, 120), last: (100, 10, 20, 5, 120))
+        // Cross multiple 64 KiB reads, including a multi-byte UTF-8 character.
+        let output = "{\"type\":\"response_item\",\"payload\":{\"text\":\"" + String(repeating: "고양이🐱", count: 20000) + "\"}}"
+        let file = try makeJSONL([output + "\r", event])
+        defer { try? FileManager.default.removeItem(at: file) }
+        let summary = TokenUsageReader().summarize(files: [file], range: DateInterval(
+            start: iso("2026-06-01T00:00:00Z"), end: iso("2026-06-02T00:00:00Z")))
+        XCTAssertEqual(summary.totals.totalTokens, 120)
+        XCTAssertEqual(summary.eventCount, 1)
+    }
+
+    func testStreamingAcceptsEscapedTokenTypeAndSkipsMalformedLines() throws {
+        let event = tokenLine(timestamp: "2026-06-01T00:00:01Z",
+                              total: (100, 10, 20, 5, 120), last: (100, 10, 20, 5, 120))
+            .replacingOccurrences(of: "token_count", with: #"token_\u0063ount"#)
+        let file = try makeJSONL(["{bad token_count", "", event])
+        defer { try? FileManager.default.removeItem(at: file) }
+        let summary = TokenUsageReader().summarize(files: [file], range: DateInterval(
+            start: iso("2026-06-01T00:00:00Z"), end: iso("2026-06-02T00:00:00Z")))
+        XCTAssertEqual(summary.totals.totalTokens, 120)
+        XCTAssertEqual(summary.eventCount, 1)
+    }
+
+    func testUsageEventsAcrossReadBoundaries() throws {
+        let event = tokenLine(timestamp: "2026-06-01T00:00:01Z",
+                              total: (100, 10, 20, 5, 120), last: (100, 10, 20, 5, 120))
+        // Put the event's newline before, on, and after the 64 KiB boundary.
+        for offset in [-1, 0, 1] {
+            let padded = String(repeating: " ", count: 64 * 1024 - event.utf8.count + offset) + event
+            let file = try makeJSONL([padded, event, ""])
+            defer { try? FileManager.default.removeItem(at: file) }
+            let summary = TokenUsageReader().summarize(files: [file], range: DateInterval(
+                start: iso("2026-06-01T00:00:00Z"), end: iso("2026-06-02T00:00:00Z")))
+            XCTAssertEqual(summary.totals.totalTokens, 120, "Boundary offset: \(offset)")
+            XCTAssertEqual(summary.eventCount, 1, "Boundary offset: \(offset)")
+        }
+    }
+
+    func testTimestampOffsetsAndFractionalSecondsPreserveRangeFiltering() throws {
+        let file = try makeJSONL([
+            tokenLine(timestamp: "2026-06-01T09:00:00.123456789+09:00",
+                      total: (100, 10, 20, 5, 120), last: (100, 10, 20, 5, 120)),
+            tokenLine(timestamp: "2026-06-02T09:00:00+09:00",
+                      total: (200, 20, 40, 10, 240), last: (100, 10, 20, 5, 120))
+        ])
+        defer { try? FileManager.default.removeItem(at: file) }
+        let summary = TokenUsageReader().summarize(files: [file], range: DateInterval(
+            start: iso("2026-06-01T00:00:00Z"), end: iso("2026-06-02T00:00:00Z")))
+        XCTAssertEqual(summary.totals.totalTokens, 120)
+        XCTAssertEqual(summary.eventCount, 1)
+    }
+
     private func session(codexSessionPath: String) -> CatdexSession {
         CatdexSession(
             id: UUID().uuidString,
