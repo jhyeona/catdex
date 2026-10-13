@@ -139,6 +139,38 @@ public struct StatusStore: Sendable {
     }
 
     @discardableResult
+    public func pruneEndedSessions(
+        now: Date = Date(),
+        heartbeatGracePeriod: TimeInterval = 120
+    ) throws -> Int {
+        guard let urls = try? FileManager.default.contentsOfDirectory(
+            at: paths.sessionsDirectory,
+            includingPropertiesForKeys: nil
+        ) else {
+            return 0
+        }
+
+        var removed = 0
+        for url in urls where url.pathExtension == "json" {
+            guard let data = try? Data(contentsOf: url),
+                  let session = try? decoder.decode(CatdexSession.self, from: data),
+                  shouldPruneEndedSession(
+                      session,
+                      now: now,
+                      heartbeatGracePeriod: heartbeatGracePeriod
+                  )
+            else {
+                continue
+            }
+
+            try removeSession(id: session.id)
+            removed += 1
+        }
+
+        return removed
+    }
+
+    @discardableResult
     public func pruneStale(olderThan interval: TimeInterval, now: Date = Date()) throws -> Int {
         guard let urls = try? FileManager.default.contentsOfDirectory(
             at: paths.sessionsDirectory,
@@ -192,11 +224,34 @@ public struct StatusStore: Sendable {
     }
 
     private func isDisconnected(_ session: CatdexSession) -> Bool {
-        guard let wrapperPID = session.wrapperPID ?? legacyWrapperPID(from: session.id) else {
+        guard let wrapperPID = wrapperPID(for: session) else {
             return false
         }
 
         return !isProcessAlive(wrapperPID)
+    }
+
+    private func shouldPruneEndedSession(
+        _ session: CatdexSession,
+        now: Date,
+        heartbeatGracePeriod: TimeInterval
+    ) -> Bool {
+        switch session.state {
+        case .stale:
+            return true
+        case .done, .failed:
+            guard let wrapperPID = wrapperPID(for: session) else {
+                return true
+            }
+            return !isProcessAlive(wrapperPID)
+                || now.timeIntervalSince(session.updatedAt) > heartbeatGracePeriod
+        case .starting, .running, .responding, .review, .waiting:
+            return false
+        }
+    }
+
+    private func wrapperPID(for session: CatdexSession) -> Int32? {
+        session.wrapperPID ?? legacyWrapperPID(from: session.id)
     }
 
     private func legacyWrapperPID(from id: String) -> Int32? {

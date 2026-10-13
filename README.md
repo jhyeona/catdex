@@ -122,7 +122,7 @@ Menu bar priority:
 review > failed > stale > responding > starting/running > waiting
 ```
 
-`done` sessions are hidden from the active list so the UI stays focused on work that may still matter.
+`done` and disconnected terminal sessions are removed automatically. A `failed` turn remains visible only while its Codex wrapper session is still open.
 
 ## Floating Panel
 
@@ -231,7 +231,7 @@ CatdexMenu.app
    │
    ├─ reads session JSON files
    ├─ reads Codex JSONL for panel context
-   ├─ prunes old finished sessions
+   ├─ removes ended and disconnected sessions
    ├─ marks lost-heartbeat sessions as stale
    └─ renders the menu bar item and floating panel
 ```
@@ -416,7 +416,7 @@ Catdex는 현재 프로젝트 폴더명을 초기 표시명으로 사용합니�
 review > failed > stale > responding > starting/running > waiting
 ```
 
-`done` 세션은 활성 목록에서 숨겨서, 아직 신경 써야 하는 작업만 보이게 합니다.
+`done` 및 연결이 끊긴 종료 세션은 자동으로 제거됩니다. `failed` 턴은 Codex wrapper 세션이 열려 있는 동안에만 표시됩니다.
 
 ## 플로팅 패널
 

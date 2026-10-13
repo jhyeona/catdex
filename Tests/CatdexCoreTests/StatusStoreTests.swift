@@ -167,6 +167,112 @@ final class StatusStoreTests: XCTestCase {
         XCTAssertEqual(Set(ids), ["new-done", "running"])
     }
 
+    func testPruneEndedSessionsRemovesTerminalSessionsWhoseWrapperEnded() throws {
+        let root = try temporaryRoot()
+        let store = StatusStore(paths: CatdexPaths(root: root))
+        let now = Date()
+
+        try store.save(CatdexSession(
+            id: "done-ended",
+            state: .done,
+            task: "Done",
+            workspace: "/tmp",
+            updatedAt: now,
+            wrapperPID: 999_999,
+            lastMessage: "done"
+        ))
+        try store.save(CatdexSession(
+            id: "done-live",
+            state: .done,
+            task: "Finishing",
+            workspace: "/tmp",
+            updatedAt: now,
+            wrapperPID: getpid(),
+            lastMessage: "done"
+        ))
+        try store.save(CatdexSession(
+            id: "stale",
+            state: .stale,
+            task: "Stale",
+            workspace: "/tmp",
+            updatedAt: now,
+            wrapperPID: getpid(),
+            lastMessage: "stale"
+        ))
+        try store.save(CatdexSession(
+            id: "failed-ended",
+            state: .failed,
+            task: "Failed",
+            workspace: "/tmp",
+            updatedAt: now,
+            wrapperPID: 999_999,
+            lastMessage: "failed"
+        ))
+        try store.save(CatdexSession(
+            id: "failed-live",
+            state: .failed,
+            task: "Failed turn",
+            workspace: "/tmp",
+            updatedAt: now,
+            wrapperPID: getpid(),
+            lastMessage: "turn aborted"
+        ))
+        try store.save(CatdexSession(
+            id: "waiting-live",
+            state: .waiting,
+            task: "Waiting",
+            workspace: "/tmp",
+            updatedAt: now,
+            wrapperPID: getpid(),
+            lastMessage: "waiting"
+        ))
+
+        let removed = try store.pruneEndedSessions()
+        let ids = Set(store.loadSessions(staleAfter: 2_000).map(\.id))
+
+        XCTAssertEqual(removed, 3)
+        XCTAssertEqual(ids, ["done-live", "failed-live", "waiting-live"])
+    }
+
+    func testPruneEndedSessionsRemovesTerminalSessionAfterHeartbeatGracePeriod() throws {
+        let root = try temporaryRoot()
+        let store = StatusStore(paths: CatdexPaths(root: root))
+        let updatedAt = Date(timeIntervalSince1970: 100)
+        try store.save(CatdexSession(
+            id: "failed-old-heartbeat",
+            state: .failed,
+            task: "Failed",
+            workspace: "/tmp",
+            updatedAt: updatedAt,
+            wrapperPID: getpid(),
+            lastMessage: "failed"
+        ))
+
+        let removed = try store.pruneEndedSessions(
+            now: Date(timeIntervalSince1970: 500),
+            heartbeatGracePeriod: 120
+        )
+
+        XCTAssertEqual(removed, 1)
+        XCTAssertNil(store.loadSession(id: "failed-old-heartbeat"))
+    }
+
+    func testPruneEndedSessionsRemovesFailedSessionWithoutWrapperMetadata() throws {
+        let root = try temporaryRoot()
+        let store = StatusStore(paths: CatdexPaths(root: root))
+        try store.save(CatdexSession(
+            id: "failed-without-wrapper",
+            state: .failed,
+            task: "Failed",
+            workspace: "/tmp",
+            updatedAt: Date(),
+            lastMessage: "failed"
+        ))
+
+        XCTAssertEqual(try store.pruneEndedSessions(), 1)
+        XCTAssertNil(store.loadSession(id: "failed-without-wrapper"))
+    }
+
     func testPruneStaleRemovesOnlyStaleSessions() throws {
         let root = try temporaryRoot()
         let store = StatusStore(paths: CatdexPaths(root: root))
