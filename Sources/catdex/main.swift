@@ -652,8 +652,7 @@ enum Git {
         let process = Process()
         let pipe = Pipe()
         process.executableURL = git
-        process.arguments = ["branch", "--show-current"]
-        process.currentDirectoryURL = URL(fileURLWithPath: workspace, isDirectory: true)
+        process.arguments = ["-C", workspace, "branch", "--show-current"]
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
 
@@ -806,6 +805,7 @@ func printUsage() {
     Usage: catdex [catdex options] [codex options] [prompt]
            catdex cleanup
            catdex doctor
+           catdex capture --json < request.json
 
     Catdex options:
       --codex-bin <command>  Codex executable to run. Defaults to CATDEX_CODEX_BIN or codex.
@@ -820,6 +820,27 @@ func printUsage() {
       catdex cleanup
       catdex doctor
     """)
+}
+
+if CommandLine.arguments.dropFirst().first == "capture" {
+    do {
+        guard Array(CommandLine.arguments.dropFirst()) == ["capture", "--json"] else {
+            throw PlannerError.invalid("Usage: catdex capture --json < request.json")
+        }
+        let data = FileHandle.standardInput.readDataToEndOfFile()
+        var request = try PlannerCoding.decoder().decode(CaptureRequest.self, from: data)
+        if request.project == nil { request.project = FileManager.default.currentDirectoryPath }
+        if request.sessionID == nil { request.sessionID = ProcessInfo.processInfo.environment["CODEX_THREAD_ID"] }
+        let record = try PlannerStore().capture(request)
+        let result: [String: Any] = ["ok": true, "recordID": record.id, "candidateCount": record.candidates.count]
+        let output = try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys])
+        print(String(decoding: output, as: UTF8.self))
+        exit(0)
+    } catch {
+        let output = try? JSONSerialization.data(withJSONObject: ["ok": false, "error": error.localizedDescription])
+        print(output.map { String(decoding: $0, as: UTF8.self) } ?? "{\"ok\":false}")
+        exit(1)
+    }
 }
 
 do {

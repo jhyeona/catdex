@@ -13,8 +13,9 @@ let package = Package(
         .executable(name: "CatdexMenu", targets: ["CatdexMenu"])
     ],
     targets: [
+        .systemLibrary(name: "CSQLite", pkgConfig: "sqlite3"),
         .target(
-            name: "CatdexCore"
+            name: "CatdexCore", dependencies: ["CSQLite"]
         ),
         .executableTarget(
             name: "catdex",
