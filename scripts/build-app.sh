@@ -43,4 +43,9 @@ cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
+# Bind the bundle identifier and Info.plist, not just the linker-signed executable.
+# UserNotifications identifies the application through its signed bundle metadata.
+codesign --force --sign - --identifier dev.catdex.CatdexMenu "$APP_DIR"
+codesign --verify --strict "$APP_DIR"
+
 printf '%s\n' "$APP_DIR"

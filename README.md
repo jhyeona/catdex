@@ -147,6 +147,14 @@ From the menu bar, use:
 - `Hide Floating Panel`
 - `Show Floating Panel`
 
+## Task Planner
+
+Add a task with **⌃⌥K** or **+ 할 일**: enter a title, choose a date, and it appears immediately in the Monday–Sunday calendar. Check the circle to complete it. Optional time scheduling is under **일정 도구**; notes and settings are under **더보기**. The bundled **catdex-capture** skill still saves conversation notes and candidates to the inbox.
+
+The floating panel now has **Sessions / Today** tabs. Open **작업 플래너…** from the menu bar for task lists, checklists, search, and the weekly calendar. Everything is stored locally in a separate SQLite database.
+
+See [the planner guide](docs/PLANNER.md) for setup, scheduling rules, and the JSON capture interface.
+
 ## Token Usage
 
 Open the menu bar item and choose `Token Usage`.

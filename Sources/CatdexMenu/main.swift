@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import CatdexCore
 import Foundation
 import UniformTypeIdentifiers
@@ -10,6 +11,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let iconStore: IconSettingsStore
     private let iconProvider: StateIconProvider
     private let floatingPanel: FloatingPanelController
+    private var planner: PlannerController?
+    private var captureMenuItem: NSMenuItem?
     private var timer: Timer?
     private var usageTimer: Timer?
     private var usageRefreshTask: Task<Void, Never>?
@@ -40,7 +43,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        configureApplicationMenu()
+        let planner = PlannerController()
+        self.planner = planner
+        floatingPanel.attachPlanner(planner)
+        planner.onPreferencesChanged = { [weak self] preferences in self?.applyPlannerPreferences(preferences) }
+        applyPlannerPreferences(planner.model.snapshot.preferences)
         statusItem.button?.font = NSFont.monospacedSystemFont(ofSize: 14, weight: .medium)
+        if CommandLine.arguments.contains("--planner") { planner.show() }
+        if CommandLine.arguments.contains("--quick-capture") { planner.showQuickAdd() }
         refreshTokenUsage()
         updateUsageTimer()
         refresh()
@@ -71,6 +82,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.button?.title = statusTitle(for: sessions)
         statusItem.menu = makeMenu()
         floatingPanel.update(with: sessions)
+        planner?.selectedProject = sessions.first?.workspace ?? ""
+        planner?.refresh()
     }
 
     private func applySessionTaskOverrides(to sessions: [CatdexSession]) -> [CatdexSession] {
@@ -148,6 +161,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(usageItem)
         menu.addItem(NSMenuItem.separator())
         addAction(floatingPanel.menuTitle, selector: #selector(toggleFloatingPanel), to: menu)
+        addAction("작업 플래너…", selector: #selector(openPlanner), to: menu)
+        addAction("할 일 추가…", selector: #selector(quickCapture), to: menu)
         addAction("Settings...", selector: #selector(openSettings), to: menu)
         addAction("Open Status Folder", selector: #selector(openStatusFolder), to: menu)
         addAction("Dismiss Finished", selector: #selector(dismissFinished), to: menu)
@@ -156,6 +171,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         addAction("Quit", selector: #selector(quit), to: menu)
         return menu
     }
+
+    private func configureApplicationMenu() {
+        // AppKit-hosted SwiftUI editors need a responder-chain Edit menu for ⌘V/⌘C/⌘Z.
+        let main = NSMenu()
+        let appItem = NSMenuItem(title: "Catdex", action: nil, keyEquivalent: "")
+        let appMenu = NSMenu(title: "Catdex")
+        let capture = NSMenuItem(title: "할 일 추가…", action: #selector(quickCapture), keyEquivalent: "k")
+        capture.target = self; capture.keyEquivalentModifierMask = [.control, .option]
+        captureMenuItem = capture; appMenu.addItem(capture); appMenu.addItem(.separator())
+        let quit = NSMenuItem(title: "Quit Catdex", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        quit.target = NSApp; appMenu.addItem(quit); appItem.submenu = appMenu; main.addItem(appItem)
+        let editItem = NSMenuItem(title: "Edit", action: nil, keyEquivalent: "")
+        let edit = NSMenu(title: "Edit")
+        for (title, action, key) in [("Undo", "undo:", "z"), ("Redo", "redo:", "Z"),
+                                     ("Cut", "cut:", "x"), ("Copy", "copy:", "c"),
+                                     ("Paste", "paste:", "v"), ("Select All", "selectAll:", "a")] {
+            edit.addItem(NSMenuItem(title: title, action: Selector(action), keyEquivalent: key))
+        }
+        editItem.submenu = edit; main.addItem(editItem)
+        NSApp.mainMenu = main
+    }
+
+    private func applyPlannerPreferences(_ preferences: PlannerPreferences) {
+        floatingPanel.setAlwaysOnTop(preferences.alwaysOnTop)
+        captureMenuItem?.keyEquivalent = [UInt32(49): " ", UInt32(45): "n", UInt32(40): "k"][preferences.shortcutKeyCode] ?? "k"
+    }
+
+    @objc private func openPlanner() { planner?.show() }
+    @objc private func quickCapture() { planner?.showQuickAdd() }
 
     private func makeUsageMenu() -> NSMenu {
         let menu = NSMenu(title: "Token Usage")
@@ -2011,9 +2055,14 @@ final class IconPreviewView: NSView {
 }
 
 @MainActor
-final class FloatingPanelController {
+final class FloatingPanelController: NSObject, NSWindowDelegate {
     private let panel: NSPanel
     private let gridView: SessionGridView
+    private let container = NSView()
+    private let tabs = NSSegmentedControl(labels: ["세션", "오늘"], trackingMode: .selectOne, target: nil, action: nil)
+    private var todayView: NSView?
+    private var latestSessions: [CatdexSession] = []
+    private var todaySize = NSSize(width: 310, height: 350)
     private let settingsStore: IconSettingsStore
     private var isShown = true
     private var didPlacePanel = false
@@ -2034,16 +2083,26 @@ final class FloatingPanelController {
         self.settingsStore = settingsStore
         panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 48, height: 48),
-            styleMask: [.borderless, .nonactivatingPanel],
+            styleMask: [.borderless, .nonactivatingPanel, .resizable],
             backing: .buffered,
             defer: false
         )
-        panel.contentView = gridView
-        panel.backgroundColor = .clear
+        super.init()
+        panel.contentView = container
+        container.addSubview(gridView)
+        container.addSubview(tabs)
+        tabs.selectedSegment = UserDefaults.standard.integer(forKey: "planner.panelTab")
+        tabs.target = self; tabs.action = #selector(changeTab)
+        panel.delegate = self
+        panel.minSize = NSSize(width: 160, height: 75)
+        let width = UserDefaults.standard.double(forKey: "planner.panelWidth")
+        let height = UserDefaults.standard.double(forKey: "planner.panelHeight")
+        if width >= 280, height >= 260 { todaySize = NSSize(width: width, height: height) }
+        panel.backgroundColor = .windowBackgroundColor
         panel.isOpaque = false
         panel.hasShadow = true
         panel.hidesOnDeactivate = false
-        panel.isMovableByWindowBackground = false
+        panel.isMovableByWindowBackground = true
         panel.level = .floating
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         gridView.onWindowDrag = { [weak self] origin, finished in
@@ -2051,9 +2110,48 @@ final class FloatingPanelController {
         }
     }
 
+    func attachPlanner(_ planner: PlannerController) {
+        let view = NSHostingView(rootView: PlannerTodayView(model: planner.model,
+            openTask: { [weak planner] id in planner?.show(taskID: id) },
+            quickAdd: { [weak planner] in planner?.showQuickAdd() }))
+        todayView = view; container.addSubview(view)
+    }
+
+    func setAlwaysOnTop(_ enabled: Bool) { panel.level = enabled ? .floating : .normal }
+
+    @objc private func changeTab() {
+        UserDefaults.standard.set(tabs.selectedSegment, forKey: "planner.panelTab")
+        update(with: latestSessions)
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        layoutContent()
+        if !isProgrammaticMove && tabs.selectedSegment == 1 {
+            todaySize = panel.frame.size
+            UserDefaults.standard.set(todaySize.width, forKey: "planner.panelWidth")
+            UserDefaults.standard.set(todaySize.height, forKey: "planner.panelHeight")
+        }
+    }
+
+    func windowDidMove(_ notification: Notification) {
+        if !isProgrammaticMove { try? settingsStore.setFloatingPanelOrigin(panel.frame.origin) }
+    }
+
+    private func layoutContent() {
+        let size = panel.contentView?.bounds.size ?? panel.frame.size
+        tabs.frame = NSRect(x: 8, y: size.height - 29, width: min(size.width - 16, 180), height: 24)
+        gridView.isHidden = tabs.selectedSegment == 1
+        todayView?.isHidden = tabs.selectedSegment != 1
+        gridView.frame = NSRect(x: 0, y: 0, width: size.width, height: max(0, size.height - 32))
+        todayView?.frame = gridView.frame
+    }
+
     func update(with sessions: [CatdexSession]) {
+        latestSessions = sessions
         gridView.sessions = sessions.filter { $0.state != .done }
-        let size = gridView.preferredSize
+        let gridSize = gridView.preferredSize
+        let size = tabs.selectedSegment == 1 ? todaySize : NSSize(width: max(160, gridSize.width), height: gridSize.height + 32)
+        panel.minSize = tabs.selectedSegment == 1 ? NSSize(width: 280, height: 260) : NSSize(width: 160, height: 75)
         let savedOrigin = settingsStore.floatingPanelOrigin()
         let origin: NSPoint
         if let savedOrigin, screen(containing: savedOrigin) != nil {
@@ -2066,6 +2164,7 @@ final class FloatingPanelController {
 
         setFramePreservingUserPlacement(NSRect(origin: origin, size: size))
         didPlacePanel = true
+        layoutContent()
 
         if isShown {
             panel.orderFrontRegardless()
